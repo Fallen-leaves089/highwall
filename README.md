@@ -2,9 +2,44 @@
 
 [English](README.en.md) | 简体中文
 
+[![CI](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml/badge.svg)](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代理与防护网关**。它只使用 Python 标准库，目标是把应用入口处最容易出现分歧的解析、策略、资源限制和审计做成可审计的小内核。
 
 当前版本：`0.7.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS。它仍不是已经完成第三方审计的生产级产品。
+
+## 30 秒看懂
+
+HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、审计和响应检查放进一个只依赖 Python 标准库的小进程，适合放在应用前面做一层可审计的 L7 防护。
+
+- **fail-closed**：解析歧义、配置错误或上游失败时返回错误，不静默放行。
+- **零第三方运行时依赖**：核心代理只使用 Python 标准库，便于审计和小规模部署。
+- **可验证**：自带测试、`highwall check` / `inspect`、本地 quickstart 和 JSONL 审计。
+
+- 适合：给内部服务、静态站、管理面或小型 API 增加一层入口防护。
+- 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
+
+> HighWall 仍是 `0.7.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+
+## 最短演示
+
+Windows 本地验收（会同时启动一个演示上游）：
+
+```powershell
+git clone https://github.com/Fallen-leaves089/highwall.git
+cd highwall
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1 -WithDemoUpstream
+```
+
+也可以只生成配置并检查：
+
+```bash
+python -m highwall init --upstream http://127.0.0.1:8080 --allowed-host app.internal --output config.json
+python -m highwall check -c config.json
+python -m highwall serve -c config.json
+```
+
+更多参数见 [快速开始](#快速开始)。
 
 ## 它解决什么
 

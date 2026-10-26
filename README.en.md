@@ -2,9 +2,44 @@
 
 English | [简体中文](README.md)
 
+[![CI](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml/badge.svg)](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
+
 HighWall is a **fail-closed HTTP/1.1 application-layer reverse proxy and security gateway**. It uses only the Python standard library and aims to turn the parsing, policy, resource-limit, and audit decisions most prone to ambiguity at an application entry point into a small, auditable core.
 
 Current version: `0.7.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS. It is still not a production-grade product that has completed an independent third-party audit.
+
+## 30-second overview
+
+HighWall puts strict request parsing, default-deny policy, resource limits, audit logging, and response inspection into a small process that uses only the Python standard library. It is designed to sit in front of an application as an auditable L7 layer.
+
+- **Fail-closed**: ambiguous input, invalid configuration, or upstream failure returns an error instead of being silently allowed.
+- **No third-party runtime dependencies**: the core proxy uses only the Python standard library, which keeps it easy to audit and deploy.
+- **Verifiable**: built-in tests, `highwall check` / `inspect`, a local quickstart, and structured JSONL audit output.
+
+- Good fit: internal services, static sites, admin surfaces, and small APIs that need an extra ingress layer.
+- Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
+
+> HighWall is still at `0.7.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+
+## Shortest demo
+
+Windows local smoke test (also starts a demo upstream):
+
+```powershell
+git clone https://github.com/Fallen-leaves089/highwall.git
+cd highwall
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1 -WithDemoUpstream
+```
+
+Or generate a configuration and check it:
+
+```bash
+python -m highwall init --upstream http://127.0.0.1:8080 --allowed-host app.internal --output config.json
+python -m highwall check -c config.json
+python -m highwall serve -c config.json
+```
+
+See [Quick start](#quick-start) for all options.
 
 ## What it solves
 
