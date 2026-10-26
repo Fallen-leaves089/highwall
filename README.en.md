@@ -167,6 +167,45 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 The admin token is read only from the environment. Do not put it in `config.json`, a command line, or audit logs. Its length must be between 32 and 512 visible, non-space ASCII characters.
 
+## Container image
+
+Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.7.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.7.0).
+
+```bash
+docker pull ghcr.io/fallen-leaves089/highwall:0.7.0
+```
+
+The image runs as non-root UID `10001` and starts `python -m highwall serve -c /etc/highwall/config.json` by default. No configuration is baked into the image. Without a mounted configuration, startup fails closed instead of falling back to an open policy.
+
+Generate a container-oriented configuration first. Inside the container, the listener must bind `0.0.0.0`, and the audit file should be written to a persistent volume:
+
+```bash
+python -m highwall init \
+  --upstream http://host.docker.internal:8080 \
+  --listen-host 0.0.0.0 \
+  --allowed-host app.internal \
+  --audit-path /var/lib/highwall/audit.jsonl \
+  --output config.json
+```
+
+`host.docker.internal` works with Docker Desktop. On Linux Docker, use a reachable service name or private address instead.
+
+```bash
+docker run --rm --name highwall \
+  -p 18090:18090 \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
+  -v highwall-data:/var/lib/highwall \
+  ghcr.io/fallen-leaves089/highwall:0.7.0
+```
+
+- For TLS in production, mount the certificate and private key read-only and reference their in-container paths from the configuration.
+- Do not expose the admin plane. It is disabled by default; if enabled, keep it on a controlled network.
+- `latest` follows the most recent release tag. Pin an exact version for production deployments.
+
 ## Configuration highlights
 
 - `policy.allowed_hosts`: exact authority allowlist. `example.com`, `example.com:443`, and `www.example.com` are three different values. Host casing is normalized and a trailing dot is removed.

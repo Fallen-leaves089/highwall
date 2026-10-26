@@ -167,6 +167,45 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 管理 token 只在环境变量中读取；不要写进 `config.json`、命令行或审计日志。token 长度必须是 32–512 个可见非空格 ASCII 字符。
 
+## 容器镜像
+
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。发布页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.7.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.7.0)。
+
+```bash
+docker pull ghcr.io/fallen-leaves089/highwall:0.7.0
+```
+
+镜像以 UID `10001` 非 root 运行，默认执行 `python -m highwall serve -c /etc/highwall/config.json`。镜像不内置配置，缺少配置时会直接拒绝启动，不会退化为放行。
+
+先生成一个适合容器的配置。容器内必须监听 `0.0.0.0`，审计文件写到持久卷：
+
+```bash
+python -m highwall init \
+  --upstream http://host.docker.internal:8080 \
+  --listen-host 0.0.0.0 \
+  --allowed-host app.internal \
+  --audit-path /var/lib/highwall/audit.jsonl \
+  --output config.json
+```
+
+`host.docker.internal` 适用于 Docker Desktop；Linux Docker 请改成容器可达的服务名或私网地址。
+
+```bash
+docker run --rm --name highwall \
+  -p 18090:18090 \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+  -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
+  -v highwall-data:/var/lib/highwall \
+  ghcr.io/fallen-leaves089/highwall:0.7.0
+```
+
+- 生产环境启用 TLS 时，把证书和私钥只读挂载到容器内，并在配置中使用容器内路径。
+- 不要暴露管理面端口；管理面默认关闭，开启后也应只在受控网络内访问。
+- `latest` 跟随最近发布的版本标签；生产部署应固定版本号。
+
 ## 配置要点
 
 - `policy.allowed_hosts`：精确 authority 白名单。`example.com`、`example.com:443`、`www.example.com` 是三个不同的值；Host 大小写会归一化，末尾点会去掉。
