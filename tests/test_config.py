@@ -405,6 +405,13 @@ class ConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ConfigError, "nesting is too deep"):
                 load_config(path)
 
+    def test_load_config_rejects_moderately_deep_json_on_all_parsers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.json"
+            path.write_text("[" * 80 + "0" + "]" * 80, encoding="utf-8")
+            with self.assertRaisesRegex(ConfigError, "nesting is too deep"):
+                load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()

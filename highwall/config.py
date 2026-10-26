@@ -27,6 +27,7 @@ _HEADER_NAME_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _MEDIA_TYPE_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+/[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 _MAX_CONFIG_BYTES = 1024 * 1024
+_MAX_JSON_DEPTH = 64
 _FILE_ATTRIBUTE_REPARSE_POINT = 0x400
 _LABEL_RE = re.compile(r"^[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -1223,6 +1224,18 @@ def _reject_constant(value: str) -> None:
     raise ConfigError(f"invalid JSON number: {value}")
 
 
+def _reject_deep_json(value: Any) -> None:
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > _MAX_JSON_DEPTH:
+            raise ConfigError("configuration nesting is too deep")
+        if isinstance(current, dict):
+            stack.extend((child, depth + 1) for child in current.values())
+        elif isinstance(current, list):
+            stack.extend((child, depth + 1) for child in current)
+
+
 def parse_config(data: Any, base_dir: Path | str = ".", source: Path | None = None) -> Config:
     raw = _object(data, "root", {"version", "server", "upstream", "policy", "rate_limit", "audit", "admin"})
     if raw.get("version") != 1:
@@ -1326,6 +1339,7 @@ def load_config_data(path: str | Path) -> tuple[dict[str, Any], Path]:
         raise ConfigError(f"invalid JSON at line {exc.lineno}, column {exc.colno}") from exc
     except RecursionError as exc:
         raise ConfigError("configuration nesting is too deep") from exc
+    _reject_deep_json(data)
     if not isinstance(data, dict):
         raise ConfigError("configuration root must be an object")
     return data, config_path

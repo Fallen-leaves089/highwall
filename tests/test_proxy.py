@@ -9,6 +9,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from highwall.config import Config
 from highwall.proxy import GatewayServer, _effective_security_headers
@@ -53,6 +54,28 @@ class _FailingOnceTLSContext:
             self.failed.set()
             raise OSError("test TLS handshake failure")
         return sock
+
+
+class _ConnectionRefused:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def connect(self) -> None:
+        raise ConnectionRefusedError("test connection refused")
+
+    def close(self) -> None:
+        pass
+
+
+class _ConnectTimeout:
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def connect(self) -> None:
+        raise socket.timeout("test connection timeout")
+
+    def close(self) -> None:
+        pass
 
 
 class ProxyIntegrationTests(unittest.TestCase):
@@ -709,6 +732,18 @@ class ProxyIntegrationTests(unittest.TestCase):
                     first.close()
         self.assertEqual(parse_response(b"".join(chunks))[0], 503)
 
+    def test_upstream_connection_refused_returns_502(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = base_config(
+                Path(directory),
+                free_port(),
+                overrides={"upstream": {"connect_timeout": 0.1}},
+            )
+            with GatewayHarness(config) as gateway:
+                with patch("highwall.proxy.http.client.HTTPConnection", _ConnectionRefused):
+                    status, _, _ = parse_response(send_raw(gateway.port, build_request()))
+            self.assertEqual(status, 502)
+
     def test_upstream_connect_timeout_returns_504(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = base_config(
@@ -717,7 +752,8 @@ class ProxyIntegrationTests(unittest.TestCase):
                 overrides={"upstream": {"connect_timeout": 0.1}},
             )
             with GatewayHarness(config) as gateway:
-                status, _, _ = parse_response(send_raw(gateway.port, build_request()))
+                with patch("highwall.proxy.http.client.HTTPConnection", _ConnectTimeout):
+                    status, _, _ = parse_response(send_raw(gateway.port, build_request()))
             self.assertEqual(status, 504)
 
     def test_upstream_protocol_failure_returns_502(self) -> None:
