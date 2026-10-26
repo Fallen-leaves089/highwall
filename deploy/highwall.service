@@ -1,0 +1,33 @@
+[Unit]
+Description=HighWall fail-closed L7 gateway
+Documentation=file:/opt/highwall/README.md
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=highwall
+Group=highwall
+WorkingDirectory=/opt/highwall
+EnvironmentFile=-/etc/highwall/highwall.env
+ExecStart=/usr/bin/python3 -m highwall serve -c /etc/highwall/config.json
+Restart=on-failure
+RestartSec=2s
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6
+StateDirectory=highwall
+ReadWritePaths=/var/lib/highwall
+# 不使用 1024 以下端口时不要授予绑定特权
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

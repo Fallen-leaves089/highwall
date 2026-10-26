@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+config.local.json
+audit.jsonl*
+*.log
+certs/
+*.pem
+*.key
+.runtime*/
+.tls-e2e*/

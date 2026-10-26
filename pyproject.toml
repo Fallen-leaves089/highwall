@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "highwall"
+version = "0.7.0"
+description = "Fail-closed HTTP application firewall and reverse proxy"
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+dependencies = []
+authors = [{ name = "HighWall contributors" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: Proxy Servers",
+    "Topic :: Security",
+]
+
+[project.urls]
+Homepage = "https://github.com/Fallen-leaves089/highwall"
+Repository = "https://github.com/Fallen-leaves089/highwall"
+Issues = "https://github.com/Fallen-leaves089/highwall/issues"
+Security = "https://github.com/Fallen-leaves089/highwall/security/policy"
+
+[project.scripts]
+highwall = "highwall.cli:main"
+
+[tool.setuptools]
+packages = ["highwall"]
+
+[tool.setuptools.package-data]
+highwall = ["py.typed"]
