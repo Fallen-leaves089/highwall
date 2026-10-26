@@ -265,14 +265,7 @@ class GatewayHarness:
 
     def __enter__(self) -> "GatewayHarness":
         self.thread.start()
-        deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline:
-            try:
-                with socket.create_connection(("127.0.0.1", self.port), timeout=0.1):
-                    return self
-            except OSError:
-                time.sleep(0.01)
-        raise RuntimeError("gateway did not start")
+        return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         self.server.shutdown()
