@@ -21,13 +21,39 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 
 > HighWall is still at `0.7.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
-## Shortest demo
+## 30-second demo
 
-Windows local smoke test (also starts a demo upstream):
+Windows single-machine demo (no second computer, no administrator rights):
 
 ```powershell
 git clone https://github.com/Fallen-leaves089/highwall.git
 cd highwall
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\demo.ps1
+```
+
+The script starts a temporary upstream and HighWall on loopback, sends a normal request plus a bad Host, SQL injection, path traversal, honeypot probe, and invalid method, prints the resulting audit events, then stops and cleans up. Output is similar to:
+
+```text
+HighWall single-machine demo
+  listen:   127.0.0.1:<port>
+  upstream: 127.0.0.1:<port>
+
+[PASS] normal       status=200 expected=200
+[PASS] bad host     status=403 expected=403
+[PASS] sqli         status=403 expected=403
+[PASS] traversal    status=400 expected=400
+[PASS] honeypot     status=200 expected=200
+[PASS] trace        status=405 expected=405
+
+[audit] request_blocked status=403 rule=HW-HOST-1003
+[audit] honeypot_hit    status=200 rule=HW-HONEY-env_probe
+```
+
+The script exits non-zero if any assertion fails. Add `-KeepRuntime` to retain the temporary runtime directory.
+
+For a persistent local instance, use quickstart (it also starts a demo upstream):
+
+```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1 -WithDemoUpstream
 ```
 
