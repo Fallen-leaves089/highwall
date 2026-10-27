@@ -532,9 +532,13 @@ class ProxyHandler(socketserver.BaseRequestHandler):
             chunk_size = 64
             chunks = [body[offset : offset + chunk_size] for offset in range(0, len(body), chunk_size)]
             interval = duration / max(1, len(chunks))
+            body_started = time.monotonic()
             for index, chunk in enumerate(chunks):
-                if index and interval:
-                    time.sleep(interval)
+                if interval:
+                    send_at = body_started + interval * (index + 1)
+                    remaining = send_at - time.monotonic()
+                    if remaining > 0:
+                        time.sleep(remaining)
                 self._send_bytes(chunk, deadline)
                 sent += len(chunk)
             return sent
