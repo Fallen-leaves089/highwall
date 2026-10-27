@@ -6,7 +6,7 @@ English | [简体中文](README.md)
 
 HighWall is a **fail-closed HTTP/1.1 application-layer reverse proxy and security gateway**. It uses only the Python standard library and aims to turn the parsing, policy, resource-limit, and audit decisions most prone to ambiguity at an application entry point into a small, auditable core.
 
-Current version: `0.7.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS. It is still not a production-grade product that has completed an independent third-party audit.
+Current version: `0.7.1`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS. It is still not a production-grade product that has completed an independent third-party audit.
 
 ## 30-second overview
 
@@ -19,7 +19,7 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 - Good fit: internal services, static sites, admin surfaces, and small APIs that need an extra ingress layer.
 - Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
 
-> HighWall is still at `0.7.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+> HighWall is still at `0.7.1` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
 ## 30-second demo
 
@@ -230,10 +230,10 @@ The admin token is read only from the environment. Do not put it in `config.json
 
 ## Container image
 
-Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.7.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.7.0).
+Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.7.1 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.7.1).
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.7.0
+docker pull ghcr.io/fallen-leaves089/highwall:0.7.1
 ```
 
 The image runs as non-root UID `10001` and starts `python -m highwall serve -c /etc/highwall/config.json` by default. No configuration is baked into the image. Without a mounted configuration, startup fails closed instead of falling back to an open policy.
@@ -260,7 +260,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.7.0
+  ghcr.io/fallen-leaves089/highwall:0.7.1
 ```
 
 - For TLS in production, mount the certificate and private key read-only and reference their in-container paths from the configuration.
