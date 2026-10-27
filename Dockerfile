@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12-slim-bookworm
 
-ARG HIGHWALL_VERSION=0.8.0
+ARG HIGHWALL_VERSION=0.8.1
 ARG HIGHWALL_REVISION=unknown
 
 LABEL org.opencontainers.image.title="HighWall" \
