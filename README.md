@@ -21,13 +21,39 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 
 > HighWall 仍是 `0.7.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
 
-## 最短演示
+## 30 秒演示
 
-Windows 本地验收（会同时启动一个演示上游）：
+Windows 单机演示（无需第二台电脑、无需管理员权限）：
 
 ```powershell
 git clone https://github.com/Fallen-leaves089/highwall.git
 cd highwall
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\demo.ps1
+```
+
+脚本会在回环地址上启动一个临时上游和 HighWall，发送正常请求、错误 Host、SQL 注入、路径穿越、蜜罐和非法方法，打印审计事件，然后自动停止并清理。输出类似：
+
+```text
+HighWall single-machine demo
+  listen:   127.0.0.1:<port>
+  upstream: 127.0.0.1:<port>
+
+[PASS] normal       status=200 expected=200
+[PASS] bad host     status=403 expected=403
+[PASS] sqli         status=403 expected=403
+[PASS] traversal    status=400 expected=400
+[PASS] honeypot     status=200 expected=200
+[PASS] trace        status=405 expected=405
+
+[audit] request_blocked status=403 rule=HW-HOST-1003
+[audit] honeypot_hit    status=200 rule=HW-HONEY-env_probe
+```
+
+任何断言失败时脚本返回非零退出码。需要保留临时运行目录时加 `-KeepRuntime`。
+
+持久运行仍然使用 quickstart（会启动一个演示上游）：
+
+```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1 -WithDemoUpstream
 ```
 
