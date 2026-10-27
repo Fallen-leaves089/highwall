@@ -8,6 +8,22 @@ HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代
 
 当前版本：`0.8.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook。它仍不是已经完成第三方审计的生产级产品。
 
+> **v0.8 重点**：多信号攻击者关联、确认后持久标记、15 分钟确认慢速窗口、L7 DDoS 告警和异步 Webhook。快速启用步骤见 [威胁防护快速启用](#威胁防护快速启用)，值班处置见 [L7 DDoS 告警与 5 分钟响应窗口](#l7-ddos-告警与-5-分钟响应窗口)。
+
+## 目录
+
+- [30 秒看懂](#30-秒看懂)
+- [30 秒演示](#30-秒演示)
+- [它解决什么](#它解决什么)
+- [攻击者指纹、标记与拖延](#攻击者指纹标记与拖延)
+- [L7 DDoS 告警与 5 分钟响应窗口](#l7-ddos-告警与-5-分钟响应窗口)
+- [威胁防护快速启用](#威胁防护快速启用)
+- [快速开始](#快速开始)
+- [配置要点](#配置要点)
+- [常见问题与排查](#常见问题与排查)
+- [部署原则](#部署原则)
+- [测试与冒烟](#测试与冒烟)
+
 ## 30 秒看懂
 
 HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、审计和响应检查放进一个只依赖 Python 标准库的小进程，适合放在应用前面做一层可审计的 L7 防护。
@@ -116,10 +132,10 @@ Cookie、Authorization、Proxy-Authorization、Set-Cookie、API Key 等敏感头
 
 判定分两阶段：
 
-1. `suspected`：请求速率、路径广度和策略违规分数达到阈值后先延迟；默认遏制窗口 `containment_seconds=300`（5 分钟）。
+1. `suspected`：请求速率、路径广度和策略违规分数达到阈值后，在 `throttle` / `tarpit` 模式下先延迟；默认遏制窗口 `containment_seconds=300`（5 分钟）。
 2. `confirmed`：达到 `confirm_score`、命中已有确认标记，或持续疑似 `confirm_after_seconds=300` 后确认；写入 `offenders.json`，默认持续慢速 `confirmed_containment_seconds=900`（15 分钟），标记 TTL `mark_ttl_seconds=86400`。
 
-`mode` 可选 `monitor`（只告警）、`throttle`（延迟）、`tarpit`（慢速响应）和 `block`（429）。`tarpit` 只在已确认攻击者上启用慢速通道；每个攻击者和全局槽位都有上限，槽位满时返回 429，不会继续占用线程。建议先 `monitor` 观察误报，再切换到 `tarpit`。
+`mode` 可选 `monitor`（只告警、不启用慢速，但达到 `confirmed` 仍会写标记）、`throttle`（延迟）、`tarpit`（慢速响应）和 `block`（429）。`tarpit` 只在已确认攻击者上启用慢速通道；每个攻击者和全局槽位都有上限，槽位满时返回 429，不会继续占用线程。建议先 `monitor` 观察误报，再切换到 `tarpit`。
 
 拖慢上限的保守估算为 `T ≈ ceil(N / S) × H`：默认 `S=4` 个单攻击者槽位、`H=15` 秒时，约 80 个请求可形成 5 分钟窗口，约 240 个请求可形成 15 分钟窗口。若单请求保持时间调为 10 秒，则 5 分钟约需 120 个请求。它是容量估算，不是 SLA：攻击者轮换 `/24`、TLS/Header 指纹、使用僵尸网络或在槽位满后重试，都会改变实际效果。共享 NAT 也可能造成连带慢速。
 
@@ -141,6 +157,93 @@ $env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
 ```
 
 DDoS 告警应接入 NOC/值班系统，并在 5 分钟窗口内完成：确认 CDN/清洗中心状态、检查上游容量和错误、保留审计证据、按预案启用边缘限流。**带宽型 L3/L4 DDoS 必须在运营商/清洗中心处理**；HighWall 可能先于告警失去可达性，因此必须配置独立于本机的外部心跳监控。不要为了看告警把管理面暴露到公网。
+
+### 告警事件与第一动作
+
+| 事件 | 含义 | 值班第一动作 |
+|---|---|---|
+| `threat_suspected` | 单个攻击者指纹达到疑似阈值 | 核对来源前缀、共享 NAT、正常自动化与审计事件，观察是否继续升级 |
+| `threat_confirmed` | 达到确认阈值或命中已有持久标记 | 保留证据，确认慢速槽位没有拖垮正常连接，再决定是否人工封禁 |
+| `ddos_suspected` | 至少 2 类 L7 信号同时异常 | 立即通知值班，开始 5 分钟响应窗口，不等待 HighWall 自动清洗 |
+| `ddos_escalated` | 异常持续 300 秒仍未恢复 | 升级 NOC、网络或清洗团队，检查 CDN、上游容量和边缘限流 |
+| `ddos_recovered` | L7 信号已恢复 | 先观察并保留证据，不要立即撤销所有人工处置 |
+
+### 5 分钟响应清单
+
+- **0–1 分钟**：确认告警时间、受影响域名和告警来源；先不要重启 HighWall，避免丢失现场和慢速槽位状态。
+- **1–3 分钟**：检查 CDN/清洗中心状态、上游 5xx/超时、连接饱和度、TLS 握手失败和审计事件。
+- **3–5 分钟**：按预案启用边缘限流或清洗，保留审计和指标，通知业务负责人。
+- **5 分钟后仍为 `ddos_escalated`**：升级网络、运营商或清洗团队；HighWall 不能替代带宽清洗和上游扩容。
+
+### Webhook 载荷示例
+
+以下只是字段示例，不是固定值。默认不包含客户端 IP、原始路径、Cookie、Authorization 或请求体：
+
+```json
+{
+  "schema": "highwall.alert.v1",
+  "event": "ddos_escalated",
+  "severity": "critical",
+  "layer": "L7",
+  "signals": {
+    "request_rate": 812.4,
+    "connection_saturation": 0.93
+  },
+  "action": "escalate_to_noc_and_check_edge_scrubbing",
+  "containment_window_seconds": 300,
+  "recommended_actions": [
+    "notify_noc",
+    "check_edge_scrubbing",
+    "verify_upstream_capacity",
+    "preserve_audit_logs"
+  ]
+}
+```
+
+## 威胁防护快速启用
+
+`highwall init` 和 `scripts/quickstart.ps1` 生成的配置默认关闭 `threat_detection`、`ddos_detection` 和 `alerting`，避免在未确认业务流量前自动限速或发告警。`config.example.json` 为了展示字段，把威胁检测和 DDoS 检测设为 `true`，但仍将 `alerting.enabled` 设为 `false`；不能直接把它当成生产配置。
+
+建议按以下顺序启用：
+
+1. 先使用 `mode=monitor` 观察 `threat_suspected` / `threat_confirmed`，确认共享 NAT、监控探针和正常自动化没有被误判。
+2. 确认 `per_actor_tarpit_slots`、`global_tarpit_slots` 和 `tarpit_hold_seconds` 不超过连接/线程预算，再切换为 `mode=tarpit`。
+3. 把 `offender_path` 放在服务账户可写、其他账户不可读写的目录；Windows 可使用 `C:/ProgramData/HighWall/data/offenders.json`，不要放在公开静态目录或审计日志目录。
+4. 设置 Webhook 并在同一服务环境中打开 `alerting.enabled=true`，然后观察 `alert_sent_total`、`alert_failed_total` 和 `alert_dropped_total`。
+
+`monitor` 不会慢速或阻断请求，但达到 `confirmed` 后仍会写入 `offenders.json`，以便重启后继续关联风险；若当前阶段完全不想产生持久标记，请先不要启用 `threat_detection`，或把 `offender_path` 指向单独的临时目录。
+
+把以下关键字段合并到现有配置中（片段不能单独作为完整配置）：
+
+```json
+{
+  "threat_detection": {
+    "enabled": true,
+    "mode": "monitor",
+    "confirm_after_seconds": 300,
+    "containment_seconds": 300,
+    "confirmed_containment_seconds": 900,
+    "tarpit_hold_seconds": 15,
+    "per_actor_tarpit_slots": 4,
+    "global_tarpit_slots": 16,
+    "offender_path": "/var/lib/highwall/offenders.json"
+  },
+  "ddos_detection": {
+    "enabled": true,
+    "escalation_seconds": 300
+  },
+  "alerting": {
+    "enabled": true
+  }
+}
+```
+
+```powershell
+$env:HIGHWALL_ALERT_WEBHOOK = "https://alerts.example.com/highwall"
+$env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
+```
+
+`HIGHWALL_ALERT_TOKEN` 是可选 Bearer token，但生产环境建议使用；不要把 token 写进配置文件、README、命令行参数或审计日志。Webhook 默认只允许 HTTPS，并禁止重定向和 URL 内嵌凭证。
 
 ## 自定义蜜罐
 
@@ -253,7 +356,9 @@ python -m highwall inspect -c config.json
 如果要启用管理面，修改配置中的：
 
 ```json
-"admin": { "enabled": true }
+{
+  "admin": { "enabled": true }
+}
 ```
 
 然后生成 token 并注入环境变量：
@@ -276,7 +381,7 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 ## 容器镜像
 
-版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。发布页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.8.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.8.0)。
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本源码见 [v0.8.0 tag](https://github.com/Fallen-leaves089/highwall/tree/v0.8.0)。
 
 ```bash
 docker pull ghcr.io/fallen-leaves089/highwall:0.8.0
@@ -344,6 +449,16 @@ docker run --rm --name highwall \
 
 完整示例见 [`config.example.json`](config.example.json)。蜜罐配置见 [`docs/HONEYPOT.md`](docs/HONEYPOT.md)，威胁边界见 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)，部署基线见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)，漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。
 
+## 常见问题与排查
+
+**没有收到 Webhook 告警。** 先确认配置文件里 `alerting.enabled=true`，并确认 `HIGHWALL_ALERT_WEBHOOK` 存在于启动 HighWall 的同一个进程环境中；只设置 shell 变量但配置关闭不会发送。再检查接收端是否返回 2xx，以及 `alert_failed_total` / `alert_dropped_total` 是否增长。管理面只用于查看状态，不要暴露到公网。
+
+**没有生成攻击者标记。** 只有 `confirmed` 会写入 `offenders.json`；`suspected` 只做限速或告警。检查请求是否达到 `score_threshold`、`confirm_score` 或 `confirm_after_seconds`，并确认 `offender_path` 对服务账户可写。标记是风险关联，不是认证或永久封禁。
+
+**正常用户被限速。** 指纹按来源 `/24` 或 `/64` 关联，共享 NAT、代理池、监控探针可能被连带影响。先在 `monitor` 模式观察，再调整阈值和槽位；必要时用路由 ACL 或来源例外把正常流量隔离出来。
+
+**为什么 HighWall 不自动处理 DDoS。** 它只做 L7 信号检测和告警；带宽型 L3/L4 DDoS、SYN flood 和清洗必须在 CDN、运营商或清洗中心完成。主机或链路饱和时 HighWall 可能先失联，因此外部心跳监控是必需的。
+
 ## 部署原则
 
 1. 先只绑定回环做验收，再绑定业务网卡；不要直接暴露到公网。
@@ -358,7 +473,7 @@ docker run --rm --name highwall \
 10. 指纹/标记先以 `monitor` 观察，确认共享 NAT 和正常自动化流量没有误伤后再启用 `tarpit`；持久标记文件和审计文件使用同一级别的 ACL 保护。
 11. DDoS 告警接入外部 NOC，并配置独立于 HighWall 主机的主动心跳；L3/L4 清洗、运营商联动和上游扩容属于本产品之外的能力。
 
-## 测试
+## 测试与冒烟
 
 ```powershell
 Set-Location <HighWall checkout>
@@ -366,6 +481,19 @@ python -m unittest discover -s tests -v
 ```
 
 测试只使用临时目录和临时回环端口，不会修改防火墙、端口转发或外部服务。
+
+只验证威胁检测、攻击者标记、慢速槽位、DDoS 状态机和 Webhook 队列：
+
+```powershell
+python -m unittest tests.test_threat -v
+```
+
+发布前建议再跑配置和语法检查：
+
+```powershell
+python -m compileall -q highwall
+python -m highwall check -c config.example.json
+```
 
 当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、攻击者指纹/标记/慢速槽位、DDoS 状态机、告警去重与队列背压、管理面、配置生成/覆盖规则与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证 TLS 指纹关联、确认后慢速响应、上游零转发、审计落盘、漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
 
