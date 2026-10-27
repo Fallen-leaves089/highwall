@@ -138,7 +138,7 @@ Containment has two stages:
 
 `mode` may be `monitor` (alert only, no slow path, but confirmed actors are still marked), `throttle` (delay), `tarpit` (slow response), or `block` (429). `tarpit` applies only to confirmed attackers; both per-actor and global slots are bounded, and a full slot returns 429 instead of continuing to occupy threads. Start with `monitor` to observe false positives before switching to `tarpit`.
 
-A conservative slowdown estimate is `T ~= ceil(N / S) * H`. With the default `S=4` per-actor slots and `H=15` seconds, about 80 requests can form a 5-minute window and about 240 requests can form a 15-minute window. This is a capacity estimate, not an SLA: rotating `/24` or `/64` sources, TLS/header fingerprints, botnets, or retries after slot exhaustion all change the result. Shared NAT can also cause collateral slowdown.
+A slowdown capacity estimate is `T ~= ceil(N / S) * H`. With the default `S=4` per-actor slots and `H=15` seconds, about 80 requests can form a 5-minute window and about 240 requests can form a 15-minute window. `H` comes from `tarpit_hold_seconds` and is capped by `max_tarpit_hold_seconds`; HighWall schedules the final response-body chunk at `H` seconds after the response headers are sent. This is a capacity estimate, not an SLA: rotating `/24` or `/64` sources, TLS/header fingerprints, botnets, or retries after slot exhaustion all change the result. Shared NAT can also cause collateral slowdown.
 
 The mark file contains only derived fingerprints, scores, signals, and an optional client IP (disabled by default). It must live in an ACL-protected data directory. When the admin plane is enabled, inspect marks with:
 

@@ -802,11 +802,14 @@ class ProxyIntegrationTests(unittest.TestCase):
                     )
                 )
                 upstream_before = len(self.stub.state.snapshot())
+                started = time.monotonic()
                 status, _, body = parse_response(
                     send_raw(gateway.port, build_request(path="/ok"), timeout=3.0)
                 )
+                elapsed = time.monotonic() - started
                 self.assertEqual(status, 200)
                 self.assertIn(b"Request accepted", body)
+                self.assertGreaterEqual(elapsed, 0.9, f"tarpit ended early: {elapsed:.3f}s")
                 self.assertEqual(len(self.stub.state.snapshot()), upstream_before)
                 audit_events = [
                     json.loads(line)
