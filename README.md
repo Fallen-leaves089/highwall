@@ -6,7 +6,7 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代理与防护网关**。它只使用 Python 标准库，目标是把应用入口处最容易出现分歧的解析、策略、资源限制和审计做成可审计的小内核。
 
-当前版本：`0.7.1`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS。它仍不是已经完成第三方审计的生产级产品。
+当前版本：`0.8.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook。它仍不是已经完成第三方审计的生产级产品。
 
 ## 30 秒看懂
 
@@ -19,7 +19,7 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 - 适合：给内部服务、静态站、管理面或小型 API 增加一层入口防护。
 - 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
 
-> HighWall 仍是 `0.7.1`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+> HighWall 仍是 `0.8.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
 
 ## 30 秒演示
 
@@ -78,6 +78,8 @@ python -m highwall serve -c config.json
 - 可按客户端 CIDR 做应用层允许/拒绝；拒绝列表优先，未配置时保持兼容。
 - 可选的 Origin 白名单：配置后，写方法缺少或伪造 Origin 会被拒绝，`Sec-Fetch-Site: cross-site` 的写请求也会被拒绝。
 - 可按客户端限制并发连接数，并在短时间内反复触发协议/策略错误时临时封禁该客户端。
+- 可对 HTTP/TLS 形状和来源前缀做多信号指纹关联；疑似阶段先限速，确认后写入有界持久标记，并对慢速通道施加 5 分钟疑似窗口或 15 分钟确认窗口。
+- 可聚合 L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误，触发 DDoS 告警并异步推送 Webhook；支持恢复事件和 5 分钟响应窗口。
 - 可按最长路径前缀配置路由策略：方法子集、只读、路由级来源 CIDR、请求体上限、独立并发槽位和每客户端令牌桶限速。
 - 可配置精确路径蜜罐：内置常见扫描路径模板，返回本地静态诱饵，绝不访问上游；命中后记录独立审计事件，并可立即封禁来源或施加有上限的短延迟。
 - 支持全局或路由级 `read_only`：写方法在到达上游前被拒绝，适合静态站、备份浏览和管理读写分离。
@@ -100,7 +102,45 @@ python -m highwall serve -c config.json
 |---|---|---|
 | 机密性 | Host/路径/来源约束、WAF、响应 DLP、安全头、回环管理面 | 用户认证、密钥管理、磁盘/内存/回环保护、最小出网 |
 | 完整性 | 路由方法白名单、只读模式、请求体限制、响应 SHA-256 钉扎、受控响应头 | 上游业务授权、数据库约束、文件完整性、EDR、不可变备份 |
-| 可用性 | 连接/在途/路由并发上限、速率限制、临时封禁、上游熔断、超时 | 带宽清洗、SYN flood 防护、主机容量、上游高可用与灾备 |
+| 可用性 | 连接/在途/路由并发上限、速率限制、临时封禁、攻击者标记、慢速槽位、L7 DDoS 告警、上游熔断、超时 | 带宽清洗、SYN flood 防护、主机容量、上游高可用与灾备 |
+
+## 攻击者指纹、标记与拖延
+
+HighWall 0.8 的指纹是**多信号关联**，不是身份认证，也不承诺“全球最精确”：
+
+- HTTP header 名称、顺序和稳定字段（User-Agent、Accept、Sec-Fetch-* 等）；
+- HighWall 终止 TLS 时的 ClientHello：版本、cipher、extension、group、signature algorithm、ALPN 和 SNI 是否存在；
+- 来源 `/24`（IPv4）或 `/64`（IPv6）前缀。
+
+Cookie、Authorization、Proxy-Authorization、Set-Cookie、API Key 等敏感头只以 `<redacted>` 参与形状哈希。原始路径、查询串、请求体、Cookie 值和 token 不进入指纹、持久标记或告警载荷。TLS 指纹只在 HighWall 自己终止 TLS 时可用；如果 TLS 在前面终止，则只能使用 HTTP 形状和来源前缀。
+
+判定分两阶段：
+
+1. `suspected`：请求速率、路径广度和策略违规分数达到阈值后先延迟；默认遏制窗口 `containment_seconds=300`（5 分钟）。
+2. `confirmed`：达到 `confirm_score`、命中已有确认标记，或持续疑似 `confirm_after_seconds=300` 后确认；写入 `offenders.json`，默认持续慢速 `confirmed_containment_seconds=900`（15 分钟），标记 TTL `mark_ttl_seconds=86400`。
+
+`mode` 可选 `monitor`（只告警）、`throttle`（延迟）、`tarpit`（慢速响应）和 `block`（429）。`tarpit` 只在已确认攻击者上启用慢速通道；每个攻击者和全局槽位都有上限，槽位满时返回 429，不会继续占用线程。建议先 `monitor` 观察误报，再切换到 `tarpit`。
+
+拖慢上限的保守估算为 `T ≈ ceil(N / S) × H`：默认 `S=4` 个单攻击者槽位、`H=15` 秒时，约 80 个请求可形成 5 分钟窗口，约 240 个请求可形成 15 分钟窗口。若单请求保持时间调为 10 秒，则 5 分钟约需 120 个请求。它是容量估算，不是 SLA：攻击者轮换 `/24`、TLS/Header 指纹、使用僵尸网络或在槽位满后重试，都会改变实际效果。共享 NAT 也可能造成连带慢速。
+
+标记文件只包含派生指纹、分数、信号和可选客户端 IP（默认不记录），不包含请求内容；应放在受 ACL 保护的数据目录。管理面开启后，可用 Bearer token 查看：
+
+```powershell
+curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/offenders
+```
+
+## L7 DDoS 告警与 5 分钟响应窗口
+
+HighWall 聚合 5 类 L7 信号：请求速率、拒绝比例、连接饱和度、TLS 握手失败数和上游错误比例。默认至少 2 类信号同时成立才发出 `ddos_suspected`；持续 300 秒后升级为 `ddos_escalated`，无信号 30 秒后发出 `ddos_recovered`。告警载荷中的 `containment_window_seconds=300` 是建议的 5 分钟响应窗口，不是自动清洗承诺。
+
+Webhook 通过有界异步队列发送，失败重试一次，队列满时丢弃并计数，不阻塞请求线程。默认只允许 HTTPS，禁止重定向和 URL 内嵌凭证：
+
+```powershell
+$env:HIGHWALL_ALERT_WEBHOOK = "https://alerts.example.com/highwall"
+$env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
+```
+
+DDoS 告警应接入 NOC/值班系统，并在 5 分钟窗口内完成：确认 CDN/清洗中心状态、检查上游容量和错误、保留审计证据、按预案启用边缘限流。**带宽型 L3/L4 DDoS 必须在运营商/清洗中心处理**；HighWall 可能先于告警失去可达性，因此必须配置独立于本机的外部心跳监控。不要为了看告警把管理面暴露到公网。
 
 ## 自定义蜜罐
 
@@ -131,6 +171,8 @@ python -m highwall serve -c config.json
 HighWall 是 L7 网关，不是“绝对高防”：
 
 - **不做**流量清洗或抗大流量 DDoS；带宽、连接数和上游容量仍需网络层防护。
+- **指纹不是身份**：HTTP/TLS 形状可被伪造或轮换；`/24` 或 `/64` 关联可能把共享出口的正常用户一起限速。标记只用于风险关联，不能作为认证、归因或司法证据。
+- **DDoS 告警不是清洗**：`ddos_suspected` / `ddos_escalated` 只说明 L7 信号异常，不保证识别流量来源；链路或主机饱和时 HighWall 本身可能不可达。
 - **不能修复**上游应用自身的认证、授权、IDOR、默认口令、密钥泄漏或未修补漏洞。
 - **不能保护**已经拿到同主机 root / 同名字空间 / 读进程内存 / 嗅探环回流量的攻击者。它必须和独立用户、命名空间、文件 ACL、网络隔离一起使用。
 - **不能防勒索软件或擦除型攻击**。L7 网关无法阻止拥有主机写权限的进程删除文件；必须依赖低权限账户、受控文件夹、EDR、离线/不可变备份和恢复演练。
@@ -139,6 +181,7 @@ HighWall 是 L7 网关，不是“绝对高防”：
 - 完整性钉扎只覆盖配置中精确匹配的静态 `GET` 路径和状态码，不覆盖查询串、动态页面、HEAD、WebSocket 或流式响应。
 - 蜜罐只覆盖显式配置的精确路径，不能发现所有扫描；它可能被指纹识别，误触封禁会影响共享 NAT 来源，也不提供高交互 shell、文件落盘或反制能力。
 - 熔断器会在上游连续故障时主动返回 503；它是故障隔离，不是 DDoS 清洗或容量保证。
+- 持久标记可能因共享 NAT、代理池或刻意模仿正常浏览器而产生误报；默认先 `monitor`，并保护 `offenders.json` 不被未授权修改或删除。
 - **不代理** WebSocket、HTTP/2、双向流式响应；检测到 Upgrade 会拒绝。响应会缓冲到 `max_response_bytes`。
 - WAF 签名是启发式，不保证覆盖所有变体，可能误报；未知业务建议先 `detect` 观察再 `block`。
 - 响应 DLP 也是启发式：只扫描 `response_scan_max_bytes` 限定的响应体前缀和响应头，媒体类型不构成免扫条件，会启发式尝试 UTF-8/Latin-1/UTF-16；`Set-Cookie` 被有意排除以避免登录 JWT 误报。未知编码、分片、二进制和业务自定义格式仍可能漏报。未知业务应先设 `response_scan_mode=detect`。
@@ -154,9 +197,11 @@ client / browser
       v
 +---------------------- HighWall process ----------------------+
 | strict parser -> connection/rate/ban + in-flight limits        |
+| -> fingerprint -> threat score -> throttle/tarpit/mark         |
 | -> client ACL -> Host/path -> honeypot OR route/read-only -> WAF/body |
 | -> bounded upstream client <-> circuit breaker                 |
 | -> response framing/sanitizer -> integrity pins -> DLP         |
+| -> L7 DDoS signals -> async webhook alerts                     |
 | -> audit + metrics                                             |
 +---------------------------------------------------------------+
       |
@@ -223,6 +268,7 @@ python -m highwall serve -c .runtime\config.json
 ```powershell
 curl.exe http://127.0.0.1:18091/healthz
 curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/metrics
+curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/offenders
 curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:18091/audit/tail?lines=50"
 ```
 
@@ -230,10 +276,10 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 ## 容器镜像
 
-版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。发布页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.7.1 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.7.1)。
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。发布页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.8.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.8.0)。
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.7.1
+docker pull ghcr.io/fallen-leaves089/highwall:0.8.0
 ```
 
 镜像以 UID `10001` 非 root 运行，默认执行 `python -m highwall serve -c /etc/highwall/config.json`。镜像不内置配置，缺少配置时会直接拒绝启动，不会退化为放行。
@@ -260,7 +306,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.7.1
+  ghcr.io/fallen-leaves089/highwall:0.8.0
 ```
 
 - 生产环境启用 TLS 时，把证书和私钥只读挂载到容器内，并在配置中使用容器内路径。
@@ -288,6 +334,9 @@ docker run --rm --name highwall \
 - `server.max_connections_per_ip`：单个来源 IP 的并发连接上限；`0` 关闭限制，可信代理来源不计入。它不能替代总连接上限。
 - `policy.routes[].max_concurrent`：路由级在途请求上限，`0` 表示关闭，不能超过 `server.max_connections`；超限返回 503 和 `Retry-After`。
 - `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`：在时间窗内累计协议或策略错误后临时拒绝该来源；`threshold=0` 关闭。封禁状态只在内存中，重启即清空。
+- `threat_detection`：多信号攻击者指纹、两阶段确认、慢速槽位和持久标记。`enabled` 默认关闭；建议先 `mode=monitor`，再切 `tarpit`。`containment_seconds=300` 是疑似窗口，`confirmed_containment_seconds=900` 是确认后的持续慢速窗口；`offender_path` 必须是受保护的可写路径。
+- `ddos_detection`：L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误的多信号聚合；`escalation_seconds=300` 表示持续 5 分钟才升级告警，`recovery_seconds` 控制恢复事件。它不会自动清洗带宽型 DDoS。
+- `alerting`：异步 Webhook 告警。`enabled=true` 时 `HIGHWALL_ALERT_WEBHOOK` 必须存在且默认为 HTTPS；可选 `HIGHWALL_ALERT_TOKEN`。`include_client_ip` 默认 `false`，`allow_http` 默认 `false`。队列满会丢弃并增加 `alert_dropped_total`，不会阻塞请求。
 - `upstream.total_timeout`：整个上游交换（连接、响应头、响应体）的绝对上限；`read_timeout` 是单次读取上限。
 - `server.tls`：只做服务端 TLS，不替代上游 TLS 校验；证书和私钥路径按配置文件所在目录解析。握手在工作线程内执行并受 `handshake_timeout` 约束，慢握手不会阻塞新的 accept；TLS 启用且未配置 HSTS 时会自动添加一年期 HSTS。
 - `audit.path`：相对路径按配置文件目录解析；日志目录必须由服务账户和运维账户保护。`audit.path_mode` 支持 `redact`（默认）、`hash` 和 `exact`；默认模式会清洗/解码路径并脱敏敏感键、后续值和明显高熵段。
@@ -306,6 +355,8 @@ docker run --rm --name highwall \
 7. 先运行 `highwall check` 和 `highwall inspect`，再启动服务；配置错误时进程应拒绝启动，而不是降级放行。
 8. 把审计日志持续外送或写入不可变存储；本机可写日志无法抵抗同权限攻击者。定期做离线恢复演练。
 9. 对高风险写接口优先做路由级只读、方法子集和来源限制；不要让 `GET` 承担删除、转账或改配置等副作用。
+10. 指纹/标记先以 `monitor` 观察，确认共享 NAT 和正常自动化流量没有误伤后再启用 `tarpit`；持久标记文件和审计文件使用同一级别的 ACL 保护。
+11. DDoS 告警接入外部 NOC，并配置独立于 HighWall 主机的主动心跳；L3/L4 清洗、运营商联动和上游扩容属于本产品之外的能力。
 
 ## 测试
 
@@ -316,7 +367,7 @@ python -m unittest discover -s tests -v
 
 测试只使用临时目录和临时回环端口，不会修改防火墙、端口转发或外部服务。
 
-当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、管理面、配置生成/覆盖规则与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
+当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、攻击者指纹/标记/慢速槽位、DDoS 状态机、告警去重与队列背压、管理面、配置生成/覆盖规则与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证 TLS 指纹关联、确认后慢速响应、上游零转发、审计落盘、漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
 
 ## 开源许可
 

@@ -45,6 +45,10 @@ class AdminIntegrationTests(unittest.TestCase):
                         ],
                     }
                 },
+                "threat_detection": {
+                    "enabled": True,
+                    "offender_path": "offenders.json",
+                },
             },
         )
         self.runtime = Runtime.build(config, admin_token=self.token)
@@ -66,6 +70,7 @@ class AdminIntegrationTests(unittest.TestCase):
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2.0)
+        self.runtime.close()
 
     def request(
         self,
@@ -129,6 +134,28 @@ class AdminIntegrationTests(unittest.TestCase):
             with self.subTest(path=path):
                 status, _, _ = self.request("GET", path, token=self.token)
                 self.assertEqual(status, 400)
+
+    def test_offenders_requires_token_and_hides_client_ip_by_default(self) -> None:
+        status, _, _ = self.request("GET", "/offenders")
+        self.assertEqual(status, 401)
+        assert self.runtime.offenders is not None
+        self.runtime.offenders.mark(
+            fingerprint="a" * 32,
+            shape_fingerprint_value="b" * 32,
+            tag="confirmed_fast_attack",
+            confidence="confirmed",
+            score=95,
+            signals=("request_rate", "path_breadth"),
+            action="tarpit",
+            source_prefix_value="203.0.113.0/24",
+            client_ip="203.0.113.8",
+        )
+        status, _, body = self.request("GET", "/offenders", token=self.token)
+        self.assertEqual(status, 200)
+        data = json.loads(body)
+        self.assertEqual(data["count"], 1)
+        self.assertEqual(data["marks"][0]["tag"], "confirmed_fast_attack")
+        self.assertNotIn("client_ip", data["marks"][0])
 
     def test_unknown_path_is_404(self) -> None:
         status, _, _ = self.request("GET", "/nope", token=self.token)

@@ -191,6 +191,26 @@ class AdminHandler(BaseHTTPRequestHandler):
             body = self.server.runtime.metrics.prometheus(extra).encode("utf-8")
             self._respond(200, "text/plain; version=0.0.4; charset=utf-8", body, head_only)
             return
+        if path == "/offenders":
+            if parsed.query:
+                self._error(400, "bad_request", head_only)
+                return
+            registry = self.server.runtime.offenders
+            records = registry.active() if registry is not None else []
+            self._json(
+                200,
+                {
+                    "count": len(records),
+                    "marks": [
+                        record.as_public(
+                            include_client_ip=self.server.runtime.config.alerting.include_client_ip
+                        )
+                        for record in records
+                    ],
+                },
+                head_only,
+            )
+            return
         if path == "/audit/tail":
             try:
                 query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True, strict_parsing=bool(parsed.query))

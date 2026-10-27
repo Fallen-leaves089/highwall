@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-HighWall 目前是 v0.7 系列（最新版本 `0.7.1`）。只有最新发布版本接收安全修复；旧版本不承诺回补。
+HighWall 目前是 v0.8 系列（最新版本 `0.8.0`）。只有最新发布版本接收安全修复；旧版本不承诺回补。
 
 ## Reporting a vulnerability
 
@@ -38,6 +38,8 @@ HighWall 尝试维持以下不变量：
 - **在途背压**：全局在途请求和路由并发槽位均有硬上限，超限在读取请求体前拒绝，避免处理线程被无限占用；拒绝响应会在 Windows 上有界排空后优雅关闭。
 - **滥用状态有界**：单 IP 并发连接、全局/路由令牌桶限速和短时间内累计违规都可限制；临时封禁表与客户端桶有容量上限，重启即清空，不写入持久状态。
 - **诱捕隔离**：蜜罐按规范化后的精确路径匹配，Host/来源 ACL 仍优先；内置模板和自定义路由都只返回配置内静态内容，不访问上游、不反射输入、不记录 Header/body/Cookie，并可在首次命中后立即封禁来源。
+- **攻击者关联与遏制有界**：指纹只使用 HTTP Header 形状、TLS ClientHello 和来源前缀；Cookie、Authorization、查询串、路径、请求体和 token 不进入指纹或标记。疑似先限速 5 分钟，确认后写入有 TTL 和容量上限的 `offenders.json`，再施加 15 分钟慢速窗口；慢速槽位按攻击者和全局双重限额，满槽返回 429。
+- **告警可观测但不阻塞请求**：L7 DDoS 需要多类信号同时成立，告警包含 `ddos_suspected`、`ddos_escalated` 和 `ddos_recovered`，默认给出 300 秒响应窗口；Webhook 使用有界异步队列、HTTPS、禁止重定向和失败重试，队列满时丢弃并计数。
 - **秘密不落审计**：查询串、Cookie、Authorization、请求体和管理 token 不写入审计；路径默认按 `redact` 清洗/解码并脱敏敏感段和路径参数，也可显式选择 `hash` 或 `exact`；管理 token 不出现在 Runtime `repr`。
 - **管理面本地化**：管理 listener 只允许 loopback，管理请求还校验 loopback peer 与 Host，使用常量时间摘要比较 Bearer token。
 - **失败关闭**：配置文件必须是普通文件，不能被符号链接/重解析点替换；配置/审计路径不可用时启动失败。
@@ -74,9 +76,13 @@ HighWall 尝试维持以下不变量：
 - 慢 TLS 握手仍会占用一个连接槽和线程，受 `max_connections`、`max_inflight_requests` 和 `handshake_timeout` 共同限制；这不是 SYN flood 或 DDoS 防御。
 - 自动封禁可能被 NAT/代理后的共享来源放大影响；启用前应结合真实来源识别和业务流量评估阈值。
 - 蜜罐只覆盖显式配置的精确路径，可能被指纹识别；首击封禁会连带影响共享 NAT 来源，`delay_ms` 也会占用在途槽位。它不是高交互沙箱、取证执行环境或 DDoS 防御。
+- 指纹不是身份，也不保证唯一或不可伪造。攻击者可轮换 Header/TLS 形状、代理池或 `/24`、`/64` 来源；共享 NAT 或正常自动化也可能被关联和限速。标记只能用于风险关联，不能作为认证、归因或司法证据。
+- 慢速通道只能拖慢读取完整响应的客户端，攻击者可以关闭连接、并发重试或轮换指纹；`tarpit` 槽位满时会返回 429。`containment_seconds=300`、`confirmed_containment_seconds=900` 是策略窗口，不是对攻击者的硬性时间保证。
+- DDoS 告警只覆盖到达 HighWall 的 L7 信号，不识别真实攻击来源，也不清洗带宽、SYN flood 或运营商侧流量。链路/主机饱和时 HighWall 可能先失去可达性，必须配置独立于本机的外部心跳，并由 CDN、清洗中心或运营商处置 L3/L4。
+- Webhook 是尽力而为的通知通道：队列有界、只重试一次，网络故障或接收端不可用时会丢失告警并增加 `alert_failed_total` / `alert_dropped_total`，不能替代外部心跳和值班升级流程。
 - 不自动轮换上游密钥、管理 token 或证书；这些需要部署流程处理。
 - 内置蜜罐预设只提供常见路径外形，不能保证与真实业务路由不冲突；启用前必须逐项核对。它们不能替代独立诱捕网络或高交互沙箱。
-- 当前没有第三方安全审计，不应把 `0.7.1` 当作生产级“绝对高防”承诺。
+- 当前没有第三方安全审计，不应把 `0.8.0` 当作生产级“绝对高防”承诺，也不应宣称“全球最精确指纹”。
 
 ## Hardening checklist
 
@@ -98,6 +104,11 @@ HighWall 尝试维持以下不变量：
 - [ ] 调整 `max_connections_per_ip` 和自动封禁阈值，避免 NAT/共享出口被误伤。
 - [ ] 蜜罐只使用确认真实不存在的精确路径；先以 `ban_seconds=0` 观察审计和命中指标，再启用首击封禁。
 - [ ] 蜜罐诱饵不得包含真实凭证、私钥、Cookie 或可横向移动的内部信息；延迟保持最小必要值。
+- [ ] 威胁检测先以 `mode=monitor` 观察 `threat_suspected` / `threat_confirmed` 和共享 NAT 误报，再切换 `tarpit`；确认 `per_actor_tarpit_slots`、`global_tarpit_slots` 与线程/连接预算匹配。
+- [ ] `offender_path` 放在受 ACL 保护的可写数据目录；标记 TTL、最大条目数和备份/恢复流程已确认，不能把标记文件当作认证或永久封禁源。
+- [ ] 启用告警时使用 HTTPS Webhook 和随机 Bearer token，验证 5 分钟升级窗口、恢复事件和 `alert_sent_total` / `alert_failed_total` / `alert_dropped_total`；不要把管理面暴露到公网。
+- [ ] 对 L7 DDoS 告警建立值班 runbook：5 分钟内确认 CDN/清洗中心、上游容量、审计证据和边缘限流；L3/L4 清洗与运营商联动由外部流程负责。
+- [ ] 配置独立于 HighWall 主机的主动心跳；主机或链路饱和时仍能由外部系统触发告警和升级。
 - [ ] 生产启用 TLS；证书私钥仅服务账户可读。
 - [ ] 确认 TLS 响应的 HSTS 生效；如显式覆盖 `Strict-Transport-Security`，确认其 `max-age` 与全站 HTTPS 策略一致。
 - [ ] 用一个不完成握手的连接占住槽位，确认其他客户端仍可建立 TLS 连接；握手失败或超时后连接、在途和 IP 槽位会释放，`tls_handshake_failures_total` 增加。
@@ -108,4 +119,4 @@ HighWall 尝试维持以下不变量：
 - [ ] 运行 `scripts/host-audit.ps1 -Json`，人工复核端口转发、RPC/SMB/RDP 监听和宽泛 ACL。
 - [ ] 上游只接受 HighWall 所在主机/网段的连接。
 - [ ] 不对公网开放管理面；不使用端口转发绕过 loopback 限制。
-- [ ] 监控 `highwall_upstream_errors_total`、`highwall_rate_limited_total`、`highwall_dlp_blocked_total`、`highwall_integrity_blocked_total`、`highwall_circuit_state`、`highwall_circuit_rejections_total`、`highwall_inflight_rejections_total`、`highwall_route_rate_limit_rejections_total`、`highwall_tls_handshake_failures_total`、`highwall_auto_bans_total`、`highwall_audit_write_failures_total` 和磁盘余量。
+- [ ] 监控 `highwall_upstream_errors_total`、`highwall_rate_limited_total`、`highwall_dlp_blocked_total`、`highwall_integrity_blocked_total`、`highwall_circuit_state`、`highwall_circuit_rejections_total`、`highwall_inflight_rejections_total`、`highwall_route_rate_limit_rejections_total`、`highwall_tls_handshake_failures_total`、`highwall_auto_bans_total`、`highwall_threat_detected_total`、`highwall_threat_tarpitted_total`、`highwall_threat_tarpit_shed_total`、`highwall_tarpit_active`、`highwall_offender_marks`、`highwall_ddos_detected_total`、`highwall_ddos_escalated_total`、`highwall_ddos_recovered_total`、`highwall_alert_sent_total`、`highwall_alert_failed_total`、`highwall_alert_dropped_total`、`highwall_audit_write_failures_total` 和磁盘余量。

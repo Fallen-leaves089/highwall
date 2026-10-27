@@ -128,6 +128,7 @@ def _serve(config: Config) -> int:
         gateway_thread.join(timeout=5.0)
         if admin_thread is not None:
             admin_thread.join(timeout=5.0)
+        runtime.close()
         for signal_value, handler in previous_handlers.items():
             try:
                 signal.signal(signal_value, handler)

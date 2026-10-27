@@ -14,6 +14,7 @@ from unittest.mock import patch
 from highwall.config import Config
 from highwall.proxy import GatewayServer, _effective_security_headers
 from highwall.runtime import Runtime
+from highwall.tlsfingerprint import TLSProfile
 from tests.support import (
     GatewayHarness,
     RawUpstream,
@@ -114,6 +115,7 @@ class ProxyIntegrationTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2.0)
+            runtime.close()
 
         self.addCleanup(stop)
         return server, runtime
@@ -700,6 +702,117 @@ class ProxyIntegrationTests(unittest.TestCase):
         self.assertEqual(third[0], 429)
         self.assertTrue(header_values(third[1], "Retry-After"))
         self.assertEqual(event["rule_id"], "HW-RATE-1003")
+
+    def test_tls_profile_reaches_threat_detector(self) -> None:
+        profile = TLSProfile(
+            version="TLS1.3",
+            ciphers=(0x1301,),
+            extensions=(43,),
+            groups=(29,),
+            signature_algorithms=(0x0804,),
+            alpn="h2",
+            sni_present=True,
+            digest="a" * 64,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            config = base_config(
+                Path(directory),
+                self.stub.port,
+                overrides={
+                    "threat_detection": {
+                        "enabled": True,
+                        "offender_path": "offenders.json",
+                        "min_requests": 100,
+                    }
+                },
+            )
+            with GatewayHarness(config) as gateway:
+                gateway.server.take_tls_profile = lambda client_address: profile
+                detector = gateway.runtime.threat_detector
+                self.assertIsNotNone(detector)
+                assert detector is not None
+                seen = []
+                original = detector.assess
+
+                def capture(head, client_ip, tls_profile=None, **kwargs):
+                    seen.append(tls_profile)
+                    return original(head, client_ip, tls_profile, **kwargs)
+
+                detector.assess = capture
+                status, _, _ = parse_response(send_raw(gateway.port, build_request()))
+        self.assertEqual(status, 200)
+        self.assertEqual(seen, [profile])
+
+    def test_confirmed_attacker_is_marked_and_tarpitted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = base_config(
+                Path(directory),
+                self.stub.port,
+                overrides={
+                    "threat_detection": {
+                        "enabled": True,
+                        "mode": "tarpit",
+                        "window_seconds": 30,
+                        "min_requests": 4,
+                        "min_distinct_paths": 3,
+                        "min_violations": 2,
+                        "score_threshold": 70,
+                        "confirm_score": 95,
+                        "confirm_after_seconds": 9999,
+                        "containment_seconds": 300,
+                        "confirmed_containment_seconds": 900,
+                        "throttle_ms": 10,
+                        "max_throttle_ms": 20,
+                        "tarpit_hold_seconds": 1,
+                        "max_tarpit_hold_seconds": 1,
+                        "per_actor_tarpit_slots": 1,
+                        "global_tarpit_slots": 2,
+                        "alert_cooldown_seconds": 1,
+                        "mark_ttl_seconds": 3600,
+                        "offender_path": "offenders.json",
+                    }
+                },
+            )
+            with GatewayHarness(config) as gateway:
+                for index in range(4):
+                    status, _, _ = parse_response(
+                        send_raw(gateway.port, build_request(path=f"/scan/{index}"))
+                    )
+                    self.assertEqual(status, 200)
+                assert gateway.runtime.offenders is not None
+                self.assertEqual(gateway.runtime.offenders.active(), [])
+
+                for index in range(2):
+                    status, _, _ = parse_response(
+                        send_raw(gateway.port, build_request(path=f"/.git/probe-{index}"))
+                    )
+                    self.assertEqual(status, 403)
+
+                marks = gateway.runtime.offenders.active()
+                self.assertEqual(len(marks), 1)
+                self.assertEqual(marks[0].tag, "confirmed_fast_attack")
+                audit_events = [
+                    json.loads(line)
+                    for line in (Path(directory) / "audit.jsonl").read_text("utf-8").splitlines()
+                ]
+                self.assertTrue(
+                    any(
+                        event["event"] == "threat_detected" and event["outcome"] == "confirmed"
+                        for event in audit_events
+                    )
+                )
+                upstream_before = len(self.stub.state.snapshot())
+                status, _, body = parse_response(
+                    send_raw(gateway.port, build_request(path="/ok"), timeout=3.0)
+                )
+                self.assertEqual(status, 200)
+                self.assertIn(b"Request accepted", body)
+                self.assertEqual(len(self.stub.state.snapshot()), upstream_before)
+                audit_events = [
+                    json.loads(line)
+                    for line in (Path(directory) / "audit.jsonl").read_text("utf-8").splitlines()
+                ]
+                self.assertTrue(any(event["event"] == "threat_tarpitted" for event in audit_events))
 
     def test_per_ip_connection_limit_rejects_excess_connections(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
