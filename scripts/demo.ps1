@@ -214,7 +214,8 @@ finally {
         $rootFull = [System.IO.Path]::GetFullPath($repoRoot)
         $runtimeFull = [System.IO.Path]::GetFullPath($RuntimeDir)
         $leaf = Split-Path -Leaf $runtimeFull
-        if ($runtimeFull.StartsWith($rootFull, [System.StringComparison]::OrdinalIgnoreCase) -and $leaf.StartsWith('.runtime-demo')) {
+        $rootPrefix = $rootFull.TrimEnd([System.IO.Path]::DirectorySeparatorChar) + [System.IO.Path]::DirectorySeparatorChar
+        if ($runtimeFull.StartsWith($rootPrefix, [System.StringComparison]::OrdinalIgnoreCase) -and $leaf.StartsWith('.runtime-demo')) {
             if ([System.IO.Directory]::Exists($runtimeFull)) {
                 foreach ($file in [System.IO.Directory]::GetFiles($runtimeFull)) {
                     if (-not $file.StartsWith($runtimeFull, [System.StringComparison]::OrdinalIgnoreCase)) {

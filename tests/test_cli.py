@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from highwall import __version__
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -22,7 +24,7 @@ class CliTests(unittest.TestCase):
     def test_version(self) -> None:
         result = self.run_cli("--version")
         self.assertEqual(result.returncode, 0)
-        self.assertIn("highwall 0.7.0", result.stdout)
+        self.assertIn(f"highwall {__version__}", result.stdout)
 
     def test_example_config_checks(self) -> None:
         result = self.run_cli("check", "-c", str(ROOT / "config.example.json"))
