@@ -32,6 +32,7 @@ from .errors import (
 from .integrity import inspect_integrity
 from .protocol import RequestHead, discard_request_body, read_request_body, read_request_head
 from .runtime import Runtime
+from .tlsfingerprint import TLSProfile, peek_tls_profile
 from .waf import HeadInspection, inspect_body, normalize_ip, resolve_client_ip, validate_head
 
 _LOG = logging.getLogger(__name__)
@@ -93,6 +94,11 @@ _RESPONSE_STRIPPED = _HOP_BY_HOP | {
 }
 _TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _CIRCUIT_STATE_CODES = {"closed": 0.0, "half_open": 1.0, "open": 2.0}
+_TARPIT_BODY = (
+    b"<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+    b"<title>Processing</title></head><body><h1>Request accepted</h1>"
+    b"<p>This request is being processed. Please wait.</p></body></html>"
+)
 
 
 @dataclass(frozen=True)
@@ -480,6 +486,60 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         except (OSError, TimeoutError):
             return 0
 
+    def _send_slow(
+        self,
+        status: int,
+        headers: list[tuple[str, str]],
+        body: bytes,
+        *,
+        method: str | None = None,
+        duration_ms: int,
+        content_length: int | None = None,
+        server_header: str = "HighWall",
+    ) -> int:
+        runtime = self.server.runtime
+        duration = max(0.0, min(float(duration_ms) / 1000.0, 60.0))
+        reason = _safe_reason("", status)
+        lines = [f"HTTP/1.1 {status} {reason}"]
+        lines.append(f"Date: {formatdate(usegmt=True)}")
+        safe_server = server_header if _valid_header_value(server_header) else "HighWall"
+        lines.append(f"Server: {safe_server}")
+        lines.append("Connection: close")
+        present = {"server", "date", "connection", "content-length"}
+        for name, value in headers:
+            if not _valid_header_name(name) or not _valid_header_value(value):
+                continue
+            lower = name.lower()
+            if lower in present:
+                continue
+            lines.append(f"{name}: {value}")
+            present.add(lower)
+        for name, value in _effective_security_headers(runtime):
+            if name.lower() not in present:
+                lines.append(f"{name}: {value}")
+                present.add(name.lower())
+        if content_length is not None:
+            lines.append(f"Content-Length: {content_length}")
+        head_bytes = ("\r\n".join(lines) + "\r\n\r\n").encode("latin-1", errors="strict")
+        deadline = time.monotonic() + duration + max(1.0, min(runtime.config.server.body_timeout, 30.0))
+        sent = 0
+        try:
+            self._send_bytes(head_bytes, deadline)
+            if method == "HEAD" or status in {204, 304} or not body:
+                if duration:
+                    time.sleep(duration)
+                return 0
+            chunk_size = 64
+            chunks = [body[offset : offset + chunk_size] for offset in range(0, len(body), chunk_size)]
+            interval = duration / max(1, len(chunks))
+            for index, chunk in enumerate(chunks):
+                if index and interval:
+                    time.sleep(interval)
+                self._send_bytes(chunk, deadline)
+                sent += len(chunk)
+            return sent
+        except (OSError, TimeoutError):
+            return sent
     def _send_error(
         self,
         error: HighWallError,
@@ -514,6 +574,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         except HighWallError:
             pass
         client_ip = peer_ip
+        tls_profile = self.server.take_tls_profile(self.client_address)
         head: RequestHead | None = None
         inspection: HeadInspection | None = None
         status = 500
@@ -531,10 +592,19 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         blocked_kind = ""
         banned_request = False
         route_slot_key: str | None = None
+        fingerprint = ""
+        shape_fingerprint = ""
+        threat_delay_ms = 0
+        threat_tarpitted = False
+        threat_blocked = False
+        threat_alert: dict | None = None
+        tarpit_acquired = False
+        ddos_alerts: list[dict] = []
         started = time.monotonic()
         metrics.inc("active_requests")
 
         def finish_audit() -> None:
+            nonlocal threat_alert
             duration_ms = int((time.monotonic() - started) * 1000)
             if honeypot_hit:
                 event = "honeypot_hit"
@@ -549,9 +619,22 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                     metrics.inc("dlp_blocked_total")
                 outcome_text = "blocked"
                 metrics.inc("blocked_total")
+            elif threat_tarpitted:
+                event = "threat_tarpitted"
+                outcome_text = "contained"
+                metrics.inc("threat_tarpitted_total")
+            elif threat_blocked:
+                event = "threat_blocked"
+                outcome_text = "blocked"
+                metrics.inc("threat_blocked_total")
+                metrics.inc("blocked_total")
             elif forwarded:
                 metrics.inc("allowed_total")
-                if integrity_detected:
+                if threat_delay_ms:
+                    event = "request_allowed_throttled"
+                    outcome_text = "allowed_throttled"
+                    metrics.inc("threat_throttled_total")
+                elif integrity_detected:
                     event = "response_allowed_with_integrity_detection"
                     outcome_text = "allowed_response_integrity_detection"
                 elif dlp_detected:
@@ -585,6 +668,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 and not banned_request
                 and not honeypot_hit
                 and not forwarded
+                and not threat_blocked
                 and client_ip not in {"", "unknown"}
                 and status in {400, 403, 405, 408, 413, 414, 415, 417, 429, 431}
             ):
@@ -611,6 +695,67 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                     detail="",
                 )
             )
+            if runtime.ddos_detector is not None:
+                if rule_id == "HW-RATE-1002":
+                    runtime.ddos_detector.record_global_rejection()
+                if status in {502, 503, 504} and not forwarded:
+                    runtime.ddos_detector.record_upstream_error()
+                ddos_result = runtime.ddos_detector.evaluate()
+                for alert in ddos_result.alerts:
+                    ddos_alerts.append(alert)
+            if (
+                runtime.threat_detector is not None
+                and fingerprint
+                and not threat_tarpitted
+                and not threat_blocked
+            ):
+                violation = runtime.threat_detector.record_violation(
+                    fingerprint,
+                    shape_fingerprint,
+                    rule_id,
+                    status,
+                    client_ip=client_ip,
+                    request_id=request_id,
+                )
+                if violation is not None and violation.alert is not None and threat_alert is None:
+                    threat_alert = violation.alert
+                    runtime.emit_alert(
+                        threat_alert,
+                        f"{threat_alert.get('event', 'threat')}:{fingerprint}",
+                    )
+                    metrics.inc("threat_detected_total")
+                    runtime.audit.write(
+                        AuditRecord(
+                            event="threat_detected",
+                            request_id=request_id,
+                            client_ip=client_ip,
+                            method=head.method if head else "",
+                            path=head.target.split("?", 1)[0] if head else "",
+                            status=status,
+                            outcome=str(threat_alert.get("confidence", "")),
+                            rule_id=str(threat_alert.get("rule_id", "HW-THREAT-1001")),
+                            detail=(
+                                f"fingerprint={fingerprint};"
+                                f"score={threat_alert.get('score', 0)};"
+                                f"signals={','.join(str(item) for item in threat_alert.get('signals', []))}"
+                            ),
+                        )
+                    )
+            for alert in ddos_alerts:
+                runtime.emit_alert(alert, str(alert.get("event", "ddos")))
+                runtime.audit.write(
+                    AuditRecord(
+                        event=str(alert.get("event", "ddos_suspected")),
+                        request_id=request_id,
+                        client_ip=client_ip,
+                        method=head.method if head else "",
+                        path=head.target.split("?", 1)[0] if head else "",
+                        status=status,
+                        outcome="alerted",
+                        rule_id="HW-DDOS-1001",
+                        detail="layer=L7",
+                    )
+                )
 
         try:
             reader = DeadlineReader(
@@ -652,6 +797,82 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                     exc = TooManyRequests("global rate limit exceeded", rule_id="HW-RATE-1002")
                     exc.retry_after = decision.retry_after
                     raise exc
+            if runtime.ddos_detector is not None:
+                runtime.ddos_detector.record_request(connection_load=self.server.connection_load())
+                ddos_result = runtime.ddos_detector.evaluate()
+                for alert in ddos_result.alerts:
+                    ddos_alerts.append(alert)
+            if runtime.threat_detector is not None:
+                assessment = runtime.threat_detector.assess(
+                    head,
+                    client_ip,
+                    tls_profile,
+                    request_id=request_id,
+                )
+                fingerprint = assessment.fingerprint
+                shape_fingerprint = assessment.shape_fingerprint
+                if assessment.alert is not None:
+                    threat_alert = assessment.alert
+                    runtime.emit_alert(
+                        threat_alert,
+                        f"{threat_alert.get('event', 'threat')}:{fingerprint}",
+                    )
+                    metrics.inc("threat_detected_total")
+                    runtime.audit.write(
+                        AuditRecord(
+                            event="threat_detected",
+                            request_id=request_id,
+                            client_ip=client_ip,
+                            method=head.method,
+                            path=head.target.split("?", 1)[0],
+                            status=0,
+                            outcome=str(threat_alert.get("confidence", "")),
+                            rule_id=str(threat_alert.get("rule_id", "HW-THREAT-1001")),
+                            detail=(
+                                f"fingerprint={fingerprint};"
+                                f"score={threat_alert.get('score', 0)};"
+                                f"signals={','.join(str(item) for item in threat_alert.get('signals', []))}"
+                            ),
+                        )
+                    )
+                if assessment.action == "tarpit":
+                    if not runtime.threat_detector.acquire_tarpit(fingerprint):
+                        threat_blocked = True
+                        metrics.inc("threat_tarpit_shed_total")
+                        exc = TooManyRequests("containment capacity is full", rule_id="HW-THREAT-1004")
+                        exc.retry_after = 1.0
+                        raise exc
+                    tarpit_acquired = True
+                    threat_tarpitted = True
+                    phase = "tarpit"
+                    status = 200
+                    rule_id = "HW-THREAT-1003"
+                    response_bytes = self._send_slow(
+                        status,
+                        [
+                            ("Content-Type", "text/html; charset=utf-8"),
+                            ("Cache-Control", "no-store"),
+                        ],
+                        _TARPIT_BODY,
+                        method=head.method,
+                        duration_ms=int(assessment.hold_seconds * 1000),
+                        content_length=len(_TARPIT_BODY),
+                    )
+                    return
+                if assessment.action == "block":
+                    threat_blocked = True
+                    exc = TooManyRequests("attacker is temporarily contained", rule_id="HW-THREAT-1002")
+                    exc.retry_after = max(1.0, assessment.retry_after)
+                    raise exc
+                if assessment.action == "throttle" and assessment.delay_ms > 0:
+                    threat_delay_ms = assessment.delay_ms
+                    if runtime.threat_detector.acquire_delay():
+                        try:
+                            time.sleep(threat_delay_ms / 1000.0)
+                        finally:
+                            runtime.threat_detector.release_delay()
+                    else:
+                        metrics.inc("threat_delay_shed_total")
             phase = "validate"
             inspection = validate_head(head, client_ip, policy)
             if inspection.waf_hit:
@@ -816,6 +1037,8 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         finally:
             if route_slot_key is not None:
                 self.server.release_route_slot(route_slot_key)
+            if tarpit_acquired and runtime.threat_detector is not None:
+                runtime.threat_detector.release_tarpit(fingerprint)
             metrics.inc("active_requests", -1)
             if audit_needed:
                 finish_audit()
@@ -844,12 +1067,39 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         self._ip_lock = threading.Lock()
         self._route_counts: dict[str, int] = {}
         self._route_lock = threading.Lock()
+        self._active_connections = 0
+        self._connection_lock = threading.Lock()
+        self._tls_profiles: dict[tuple, TLSProfile | None] = {}
+        self._tls_profile_lock = threading.Lock()
         try:
             if ipaddress.ip_address(address[0]).version == 6:
                 self.address_family = socket.AF_INET6
         except ValueError:
             pass
         super().__init__(address, ProxyHandler)
+
+    def connection_load(self) -> float:
+        with self._connection_lock:
+            return min(1.0, self._active_connections / max(1, self.runtime.config.server.max_connections))
+
+    def store_tls_profile(self, client_address: tuple, profile: TLSProfile) -> None:
+        key = tuple(client_address)
+        with self._tls_profile_lock:
+            self._tls_profiles[key] = profile
+            while len(self._tls_profiles) > max(64, self.runtime.config.server.max_connections * 2):
+                self._tls_profiles.pop(next(iter(self._tls_profiles)))
+
+    def take_tls_profile(self, client_address: tuple) -> TLSProfile | None:
+        with self._tls_profile_lock:
+            return self._tls_profiles.pop(tuple(client_address), None)
+
+    def _record_tls_failure(self) -> None:
+        detector = self.runtime.ddos_detector
+        if detector is None:
+            return
+        detector.record_tls_failure()
+        for alert in detector.evaluate().alerts:
+            self.runtime.emit_alert(alert, str(alert.get("event", "ddos")))
 
     def _reject_busy(self, request: socket.socket) -> None:
         if not self.tls_enabled:
@@ -879,15 +1129,27 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         except OSError:
             pass
         self.runtime.metrics.inc("blocked_total")
+        detector = self.runtime.ddos_detector
+        if detector is not None:
+            detector.record_connection_rejection()
+            for alert in detector.evaluate().alerts:
+                self.runtime.emit_alert(alert, str(alert.get("event", "ddos")))
 
-    def _accept_tls(self, request: socket.socket) -> socket.socket | None:
+    def _accept_tls(self, request: socket.socket, client_address: tuple) -> socket.socket | None:
         assert self.tls_context is not None
+        profile: TLSProfile | None = None
+        if isinstance(self.tls_context, ssl.SSLContext):
+            profile = peek_tls_profile(request, self.runtime.config.server.tls.handshake_timeout)
         request.settimeout(self.runtime.config.server.tls.handshake_timeout)
         try:
-            return self.tls_context.wrap_socket(request, server_side=True)
+            wrapped = self.tls_context.wrap_socket(request, server_side=True)
         except Exception:
             self.runtime.metrics.inc("tls_handshake_failures_total")
+            self._record_tls_failure()
             return None
+        if profile is not None:
+            self.store_tls_profile(client_address, profile)
+        return wrapped
 
     def _connection_key(self, client_address: tuple[str, int]) -> str | None:
         if self.runtime.config.server.max_connections_per_ip <= 0:
@@ -942,9 +1204,15 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             self.runtime.metrics.inc("ip_connection_rejections_total")
             self._reject_busy(request)
             return
+        with self._connection_lock:
+            self._active_connections += 1
+        self.runtime.metrics.set("active_connections", float(self._active_connections))
         try:
             super().process_request(request, client_address)
         except BaseException:
+            with self._connection_lock:
+                self._active_connections = max(0, self._active_connections - 1)
+            self.runtime.metrics.set("active_connections", float(self._active_connections))
             if ip_key is not None:
                 self._release_ip_slot(ip_key)
             self._slots.release()
@@ -965,7 +1233,7 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             if self._request_slots is not None and not request_slot_acquired:
                 return
             if self.tls_context is not None:
-                accepted = self._accept_tls(request)
+                accepted = self._accept_tls(request, client_address)
                 if accepted is None:
                     return
                 connection = accepted
@@ -979,6 +1247,9 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
                     pass
             if request_slot_acquired and self._request_slots is not None:
                 self._request_slots.release()
+            with self._connection_lock:
+                self._active_connections = max(0, self._active_connections - 1)
+            self.runtime.metrics.set("active_connections", float(self._active_connections))
             if ip_key is not None:
                 self._release_ip_slot(ip_key)
             self._slots.release()

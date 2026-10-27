@@ -6,7 +6,7 @@ English | [简体中文](README.md)
 
 HighWall is a **fail-closed HTTP/1.1 application-layer reverse proxy and security gateway**. It uses only the Python standard library and aims to turn the parsing, policy, resource-limit, and audit decisions most prone to ambiguity at an application entry point into a small, auditable core.
 
-Current version: `0.7.1`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS. It is still not a production-grade product that has completed an independent third-party audit.
+Current version: `0.8.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 adds multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks. It is still not a production-grade product that has completed an independent third-party audit.
 
 ## 30-second overview
 
@@ -19,7 +19,7 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 - Good fit: internal services, static sites, admin surfaces, and small APIs that need an extra ingress layer.
 - Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
 
-> HighWall is still at `0.7.1` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+> HighWall is still at `0.8.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
 ## 30-second demo
 
@@ -79,6 +79,9 @@ See [Quick start](#quick-start) for all options.
 - Optional Origin allowlist: once configured, write methods must carry an allowed Origin, and cross-site write requests with `Sec-Fetch-Site: cross-site` are rejected.
 - Per-client concurrent connection limits, plus temporary bans for clients that repeatedly trigger protocol or policy errors in a short window.
 - Longest-prefix route policies: method subsets, read-only mode, route-level client CIDRs, body limits, dedicated concurrency slots, and per-client token-bucket rate limits.
+- Best-effort multi-signal fingerprints from HTTP header shape, the TLS ClientHello when HighWall terminates TLS, and a `/24` or `/64` source prefix. Sensitive header values are reduced to redacted placeholders and never become part of the fingerprint.
+- Two-stage containment: `suspected` traffic is first throttled for a 5-minute window; `confirmed` attackers are written to a bounded persistent mark store and slowed for 15 minutes. Tarpit slots are globally and per-actor bounded.
+- Aggregates L7 request rate, rejection ratio, connection saturation, TLS handshake failures, and upstream error ratio into `ddos_suspected` / `ddos_escalated` alerts, with a 5-minute response window, recovery events, and asynchronous webhook delivery.
 - Configurable exact-path honeypots: built-in templates for common scanning paths return local static decoys and never contact the upstream. A hit creates a dedicated audit event and can immediately ban the source or add a bounded short delay.
 - Global or route-level `read_only`: write methods are rejected before reaching the upstream, which is useful for static sites, backup browsing, and separating administrative reads from writes.
 - Optional response-integrity pinning for exact `GET` paths: validates the status code and response-body SHA-256. `detect` records a hit; `block` returns 502 without forwarding the replaced content.
@@ -100,7 +103,45 @@ See [Quick start](#quick-start) for all options.
 |---|---|---|
 | Confidentiality | Host/path/source restrictions, WAF, response DLP, security headers, loopback admin plane | User authentication, key management, disk/memory/loopback protection, least-privilege egress |
 | Integrity | Route method allowlists, read-only mode, request-body limits, response SHA-256 pinning, controlled response headers | Upstream authorization, database constraints, file integrity, EDR, immutable backups |
-| Availability | Connection/in-flight/route concurrency limits, rate limits, temporary bans, upstream circuit breaker, timeouts | Bandwidth scrubbing, SYN-flood protection, host capacity, upstream high availability and disaster recovery |
+| Availability | Connection/in-flight/route concurrency limits, rate limits, temporary bans, attacker marks, bounded slow slots, L7 DDoS alerts, upstream circuit breaker, timeouts | Bandwidth scrubbing, SYN-flood protection, host capacity, upstream high availability and disaster recovery |
+
+## Attacker fingerprints, marks, and slowdown
+
+The HighWall 0.8 fingerprint is a **multi-signal correlation**, not an identity and not a claim of “the world's most precise fingerprint”:
+
+- HTTP header names, ordering, and stable fields such as User-Agent, Accept, and Sec-Fetch-*;
+- the ClientHello observed when HighWall terminates TLS: version, ciphers, extensions, groups, signature algorithms, ALPN, and whether SNI is present;
+- the source `/24` (IPv4) or `/64` (IPv6) prefix.
+
+Cookies, Authorization, Proxy-Authorization, Set-Cookie, API keys, and similar secrets participate only as `<redacted>` shape markers. Raw paths, query strings, request bodies, cookie values, and tokens do not enter fingerprints, persistent marks, or alert payloads. TLS fingerprinting is available only when HighWall terminates TLS; if TLS terminates in front of HighWall, only HTTP shape and source-prefix correlation remain available.
+
+Containment has two stages:
+
+1. `suspected`: request rate, path breadth, and policy-violation signals reach the threshold and receive a delay first. The default containment window is `containment_seconds=300` (5 minutes).
+2. `confirmed`: reaching `confirm_score`, matching an existing confirmed mark, or remaining suspected for `confirm_after_seconds=300` promotes the actor. HighWall writes `offenders.json` and applies a default `confirmed_containment_seconds=900` (15 minutes) slow window. The mark TTL is `mark_ttl_seconds=86400`.
+
+`mode` may be `monitor` (alert only), `throttle` (delay), `tarpit` (slow response), or `block` (429). `tarpit` applies only to confirmed attackers; both per-actor and global slots are bounded, and a full slot returns 429 instead of continuing to occupy threads. Start with `monitor` to observe false positives before switching to `tarpit`.
+
+A conservative slowdown estimate is `T ~= ceil(N / S) * H`. With the default `S=4` per-actor slots and `H=15` seconds, about 80 requests can form a 5-minute window and about 240 requests can form a 15-minute window. This is a capacity estimate, not an SLA: rotating `/24` or `/64` sources, TLS/header fingerprints, botnets, or retries after slot exhaustion all change the result. Shared NAT can also cause collateral slowdown.
+
+The mark file contains only derived fingerprints, scores, signals, and an optional client IP (disabled by default). It must live in an ACL-protected data directory. When the admin plane is enabled, inspect marks with:
+
+```powershell
+curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/offenders
+```
+
+## L7 DDoS alerts and the 5-minute response window
+
+HighWall aggregates five L7 signals: request rate, rejection ratio, connection saturation, TLS handshake-failure count, and upstream error ratio. By default at least two signals must agree before it emits `ddos_suspected`; after 300 seconds it escalates to `ddos_escalated`, and after 30 seconds without signals it emits `ddos_recovered`. The `containment_window_seconds=300` field in the alert payload is a recommended 5-minute response window, not an automatic scrubbing guarantee.
+
+Webhook alerts use a bounded asynchronous queue, retry once, and drop with a counter when the queue is full without blocking request threads. HTTPS is required by default; redirects and credentials embedded in the URL are rejected:
+
+```powershell
+$env:HIGHWALL_ALERT_WEBHOOK = "https://alerts.example.com/highwall"
+$env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
+```
+
+Route DDoS alerts to a NOC or on-call system. During the 5-minute window, confirm CDN/scrubbing status, check upstream capacity and errors, preserve audit evidence, and enable edge rate limiting according to the incident plan. **Bandwidth-based L3/L4 DDoS must be handled by the carrier or scrubbing provider**; HighWall may become unreachable before its alert is delivered, so configure an external heartbeat that is independent of this host. Never expose the admin plane to the public internet just to read alerts.
 
 ## Custom honeypots
 
@@ -131,6 +172,8 @@ For details, see [`docs/HONEYPOT.md`](docs/HONEYPOT.md). The template catalog an
 HighWall is an L7 gateway, not an “absolute” defense:
 
 - It **does not perform** traffic scrubbing or large-scale DDoS mitigation. Bandwidth, connection capacity, and upstream capacity still require network-layer protection.
+- **Fingerprints are not identities.** HTTP/TLS shape can be spoofed or rotated, and `/24` or `/64` correlation can slow normal users behind a shared egress. Marks are risk correlation only, never authentication, attribution, or forensic proof.
+- **DDoS alerts are not scrubbing.** `ddos_suspected` and `ddos_escalated` describe L7 signal anomalies; they do not identify the source or keep HighWall reachable when the link or host is saturated.
 - It **cannot fix** authentication, authorization, IDOR, default credentials, key leakage, or unpatched vulnerabilities in the upstream application.
 - It **cannot protect against** an attacker who already has root on the same host, shares the same namespace, can read process memory, or can sniff loopback traffic. It must be combined with separate users, namespaces, file ACLs, and network isolation.
 - It **cannot prevent ransomware or destructive attacks**. An L7 gateway cannot stop a process with host write access from deleting files. Use low-privilege accounts, controlled folders, EDR, offline or immutable backups, and recovery drills.
@@ -154,9 +197,11 @@ client / browser
       v
 +---------------------- HighWall process ----------------------+
 | strict parser -> connection/rate/ban + in-flight limits        |
+| -> fingerprint -> threat score -> throttle/tarpit/mark         |
 | -> client ACL -> Host/path -> honeypot OR route/read-only -> WAF/body |
 | -> bounded upstream client <-> circuit breaker                 |
 | -> response framing/sanitizer -> integrity pins -> DLP         |
+| -> L7 DDoS signals -> async webhook alerts                     |
 | -> audit + metrics                                             |
 +---------------------------------------------------------------+
       |
@@ -223,6 +268,7 @@ Access it with:
 ```powershell
 curl.exe http://127.0.0.1:18091/healthz
 curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/metrics
+curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/offenders
 curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:18091/audit/tail?lines=50"
 ```
 
@@ -230,10 +276,10 @@ The admin token is read only from the environment. Do not put it in `config.json
 
 ## Container image
 
-Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.7.1 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.7.1).
+Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.8.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.8.0).
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.7.1
+docker pull ghcr.io/fallen-leaves089/highwall:0.8.0
 ```
 
 The image runs as non-root UID `10001` and starts `python -m highwall serve -c /etc/highwall/config.json` by default. No configuration is baked into the image. Without a mounted configuration, startup fails closed instead of falling back to an open policy.
@@ -260,7 +306,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.7.1
+  ghcr.io/fallen-leaves089/highwall:0.8.0
 ```
 
 - For TLS in production, mount the certificate and private key read-only and reference their in-container paths from the configuration.
@@ -288,6 +334,9 @@ docker run --rm --name highwall \
 - `server.max_connections_per_ip`: concurrent connection limit for a single source IP; `0` disables it, and trusted-proxy sources are not counted. It does not replace the total connection limit.
 - `policy.routes[].max_concurrent`: route-level in-flight limit; `0` disables it, and it cannot exceed `server.max_connections`. Rejections return 503 with `Retry-After`.
 - `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`: temporarily reject a source after protocol or policy errors accumulate within a time window; `threshold=0` disables it. Ban state is in memory only and is cleared on restart.
+- `threat_detection`: multi-signal fingerprints, two-stage confirmation, bounded slow slots, and persistent marks. Disabled by default; start with `mode=monitor`, then move to `tarpit`. `containment_seconds=300` is the suspected window, while `confirmed_containment_seconds=900` is the confirmed slow window. `offender_path` must be a protected writable path.
+- `ddos_detection`: aggregates L7 request rate, rejection ratio, connection saturation, TLS failures, and upstream errors. `escalation_seconds=300` means a 5-minute sustained signal window before escalation; `recovery_seconds` controls recovery events. It does not scrub bandwidth-based DDoS.
+- `alerting`: asynchronous webhook delivery. When `enabled=true`, `HIGHWALL_ALERT_WEBHOOK` is required and defaults to HTTPS only; `HIGHWALL_ALERT_TOKEN` is optional. `include_client_ip` and `allow_http` both default to `false`. A full queue drops alerts and increments `alert_dropped_total` without blocking requests.
 - `upstream.total_timeout`: absolute limit for the complete upstream exchange (connect, response headers, and response body); `read_timeout` is the per-read limit.
 - `server.tls`: server-side TLS only; it does not replace upstream TLS verification. Certificate and key paths are resolved relative to the configuration file. The handshake runs in a worker thread under `handshake_timeout`, so a slow handshake does not block new accepts. When TLS is enabled without explicit HSTS, a one-year HSTS header is added automatically.
 - `audit.path`: relative paths resolve from the configuration directory. The log directory must be protected from both the service account and the operations account. `audit.path_mode` supports `redact` (default), `hash`, and `exact`; the default mode cleans and decodes paths and redacts sensitive keys, following values, and obvious high-entropy segments.
@@ -306,6 +355,8 @@ See [`config.example.json`](config.example.json) for the complete example. Honey
 7. Run `highwall check` and `highwall inspect` before starting the service. A bad configuration should make the process refuse to start rather than fail open.
 8. Continuously ship audit logs off-host or write them to immutable storage. A locally writable log cannot resist an attacker with the same privileges. Run offline recovery drills regularly.
 9. Prefer route-level read-only mode, method subsets, and source restrictions for high-risk write APIs. Do not let `GET` perform deletion, transfers, configuration changes, or other side effects.
+10. Observe fingerprints and marks in `monitor` mode first, confirm shared NAT and normal automation are not harmed, then enable `tarpit`; protect the mark file and audit logs with the same ACL discipline.
+11. Route DDoS alerts to an external NOC and configure an active heartbeat independent of the HighWall host. L3/L4 scrubbing, carrier coordination, and upstream capacity expansion remain outside this product.
 
 ## Tests
 
@@ -316,7 +367,7 @@ python -m unittest discover -s tests -v
 
 Tests use temporary directories and temporary loopback ports only. They do not modify firewalls, port proxies, or external services.
 
-The current suite covers strict parsing, path-parameter and trailing-dot bypasses, case-variant route bypasses, request encoding, a WAF bypass matrix, DLP (binary, UTF-16, response headers, and `Set-Cookie` false positives), route rate limits, HSTS, audit redaction, route policies, read-only mode, response pinning, the circuit-breaker state machine, in-flight and route-concurrency backpressure, custom honeypots, first-hit bans, the admin plane, configuration generation and overwrite rules, and the host-audit script. Windows integration tests start a real loopback gateway and verify drift detection, reconfiguration backups, and shutdown flow without modifying the firewall, port proxies, or external services.
+The current suite covers strict parsing, path-parameter and trailing-dot bypasses, case-variant route bypasses, request encoding, a WAF bypass matrix, DLP (binary, UTF-16, response headers, and `Set-Cookie` false positives), route rate limits, HSTS, audit redaction, route policies, read-only mode, response pinning, the circuit-breaker state machine, in-flight and route-concurrency backpressure, custom honeypots, first-hit bans, attacker fingerprints/marks/slow slots, the DDoS state machine, alert deduplication and queue backpressure, the admin plane, configuration generation and overwrite rules, and the host-audit script. Windows integration tests start a real loopback gateway and verify TLS fingerprint correlation, confirmed slow responses, zero upstream forwarding for tarpitted requests, audit persistence, drift detection, reconfiguration backups, and shutdown flow without modifying the firewall, port proxies, or external services.
 
 ## License
 

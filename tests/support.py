@@ -271,6 +271,7 @@ class GatewayHarness:
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2.0)
+        self.runtime.close()
 
 
 def build_request(

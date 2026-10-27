@@ -110,6 +110,10 @@ python -m highwall init `
 - `upstream.circuit_breaker` 的 `failure_threshold`、`window`、`open_seconds` 和 `half_open_max_requests` 按上游容量和恢复时间调整；熔断期间会主动返回 503；
 - `server.max_connections_per_ip` 约束单来源并发；反向代理/LB 来源若在 `trusted_proxies` 中则不按 TCP 来源计数；
 - `rate_limit.auto_ban_threshold` 设为 `0` 可关闭临时封禁；启用时按 NAT/共享出口规模调整阈值、窗口和封禁时长；
+- `threat_detection` 默认关闭。先以 `mode=monitor` 观察 `threat_suspected` / `threat_confirmed`，再启用 `tarpit`；默认 `containment_seconds=300` 是疑似限速窗口，`confirmed_containment_seconds=900` 是确认后的慢速窗口。`per_actor_tarpit_slots` 和 `global_tarpit_slots` 要与线程、连接数和业务容量匹配；
+- `threat_detection.offender_path` 指向受 ACL 保护的可写数据目录，例如 `C:\ProgramData\HighWall\data\offenders.json`；不要放在只读程序目录、WSL 可写目录或与审计日志相同的公开目录。标记有 TTL 和容量上限，不是永久封禁源；
+- `ddos_detection` 默认关闭。启用后聚合 L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误；默认需要至少 2 类信号，持续 300 秒升级告警，无信号 30 秒恢复。它不识别 L3/L4 来源，也不做带宽清洗；
+- `alerting` 默认关闭。启用时必须通过 `HIGHWALL_ALERT_WEBHOOK` 提供 HTTPS URL，可选 `HIGHWALL_ALERT_TOKEN`；不要把 token 写进配置或命令行。`include_client_ip=false` 是推荐默认值，`allow_http=false` 不应在生产打开；
 - `audit.path` 指向受保护的数据目录（例如相对配置目录的 `data\\audit.jsonl`），不要与只读 `config.json` 同级写入；
 - `audit.path_mode` 默认 `redact`，会解码并脱敏敏感路径段和参数；`hash` 适合只做关联分析，`exact` 只应在明确接受路径进入审计日志后启用；
 - `admin.enabled` 默认保持 `false`，需要时再打开。
@@ -303,9 +307,29 @@ HighWall 不替代防火墙、netns、用户隔离或上游认证。
 - 监控启动失败、`audit_write_failures_total`、`upstream_errors_total`、`blocked_total` 和 `rate_limited_total`；
 - 监控 `dlp_detected_total`、`dlp_blocked_total`、`ip_connection_rejections_total`、`auto_bans_total` 和 `auto_ban_rejections_total`；
 - 监控 `integrity_detected_total`、`integrity_blocked_total`、`circuit_state`、`circuit_open_total`、`circuit_rejections_total`、`inflight_rejections_total`、`route_rate_limit_rejections_total`、`route_concurrency_rejections_total` 和 `tls_handshake_failures_total`；
+- 监控 `threat_detected_total`、`threat_tarpitted_total`、`threat_tarpit_shed_total`、`tarpit_active`、`offender_marks`、`ddos_detected_total`、`ddos_escalated_total`、`ddos_recovered_total`、`alert_sent_total`、`alert_failed_total`、`alert_dropped_total` 和 `alert_queue_depth`；
 - 把审计日志持续外送或写入不可变存储；本机可写日志不能抵抗同权限攻击者修改或删除；
 - 自动封禁只存在内存中；重启会清空。需要长期封禁时，应使用主机防火墙或上游访问控制，而不是把应用内状态当持久策略；
 - 管理 token 轮换后重启；旧 token 不会自动失效，直到进程重启或环境更新。
+
+### 外部告警 Webhook
+
+建议把确认攻击者、DDoS 疑似的告警接入现有 NOC/值班系统，而不是只在本机看日志。示例（仅演示变量注入，不要把真实 token 写进脚本仓库）：
+
+```powershell
+$env:HIGHWALL_ALERT_WEBHOOK = 'https://alerts.example.com/highwall'
+$env:HIGHWALL_ALERT_TOKEN = python -c "import secrets; print(secrets.token_urlsafe(32))"
+python -m highwall serve -c 'C:\ProgramData\HighWall\config.json'
+```
+
+接收端应校验 Bearer token、限制请求体大小、把告警写入独立审计，并按 `event` 分流：
+
+- `threat_suspected` / `threat_confirmed`：检查指纹、分数、信号和标记，结合共享 NAT 与业务变更确认是否误报；
+- `ddos_suspected`：立即通知值班，开始 5 分钟响应窗口；
+- `ddos_escalated`：按 DDoS 预案升级到网络/清洗团队，检查 CDN、上游容量和边缘限流；
+- `ddos_recovered`：记录恢复时间，但不要立即撤销所有人工处置，先确认攻击没有转为低频持续。
+
+`containment_window_seconds=300` 是建议响应窗口，不是自动清洗承诺。带宽型 L3/L4 DDoS 必须在运营商或清洗中心处理；HighWall 主机可能先失去可达性，因此必须配置独立于本机的主动心跳和外部告警升级链路。Webhook 发送是尽力而为：队列满、接收端故障或网络中断会导致丢失，相关指标必须报警。
 
 ## 8. 宿主只读审计
 
@@ -381,5 +405,10 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 - [ ] 上游只接受网关连接。
 - [ ] 确认 DNS、RPC、数据库、原始套接字和其他非 HTTP 流量由主机防火墙或网络隔离单独处理。
 - [ ] 现有网络隔离、端口转发和应用靶场未被误改。
+- [ ] 威胁检测先以 `monitor` 运行，确认疑似/确认事件、共享 NAT 和正常自动化流量无异常后，再启用 `tarpit`；慢速窗口、槽位上限和 429 行为符合预期。
+- [ ] 确认 `offenders.json` 位于受 ACL 保护的可写目录，TTL、最大条目数和备份/恢复流程已核对；标记文件不能被公网或低权限用户读取、替换或删除。
+- [ ] Webhook 使用 HTTPS 和随机 Bearer token；接收端能验证 token、处理 `threat_*` 与 `ddos_*` 事件，并监控 `alert_sent_total` / `alert_failed_total` / `alert_dropped_total`。
+- [ ] 已演练 5 分钟 DDoS 响应窗口：通知值班、检查 CDN/清洗中心、核对上游容量、保留审计证据、按预案启用边缘限流。
+- [ ] 已配置独立于 HighWall 主机的主动心跳；确认 L3/L4 清洗、运营商联动和上游扩容由外部流程负责。
 
 任何“把服务暴露到真实网卡/公网”的动作，都应在这些检查完成并得到明确确认后再执行。

@@ -232,6 +232,59 @@ class AdminConfig:
 
 
 @dataclass(frozen=True)
+class ThreatDetectionConfig:
+    enabled: bool
+    mode: str
+    window_seconds: float
+    min_requests: int
+    min_distinct_paths: int
+    min_violations: int
+    score_threshold: int
+    confirm_score: int
+    confirm_after_seconds: float
+    containment_seconds: float
+    confirmed_containment_seconds: float
+    throttle_ms: int
+    max_throttle_ms: int
+    tarpit_hold_seconds: float
+    max_tarpit_hold_seconds: float
+    per_actor_tarpit_slots: int
+    global_tarpit_slots: int
+    max_tracked_actors: int
+    max_paths_per_actor: int
+    alert_cooldown_seconds: float
+    mark_ttl_seconds: float
+    offender_path: Path
+
+
+@dataclass(frozen=True)
+class DdosDetectionConfig:
+    enabled: bool
+    window_seconds: float
+    request_rate_threshold: float
+    global_rejection_ratio: float
+    connection_saturation: float
+    tls_failure_threshold: int
+    upstream_error_ratio: float
+    min_signals: int
+    cooldown_seconds: float
+    escalation_seconds: float
+    recovery_seconds: float
+
+
+@dataclass(frozen=True)
+class AlertingConfig:
+    enabled: bool
+    webhook_url_env: str
+    auth_token_env: str
+    timeout_seconds: float
+    max_queue: int
+    cooldown_seconds: float
+    include_client_ip: bool
+    allow_http: bool
+
+
+@dataclass(frozen=True)
 class Config:
     version: int
     source: Path | None
@@ -241,6 +294,9 @@ class Config:
     rate_limit: RateLimitConfig
     audit: AuditConfig
     admin: AdminConfig
+    threat_detection: ThreatDetectionConfig
+    ddos_detection: DdosDetectionConfig
+    alerting: AlertingConfig
 
 
 def canonicalize_host(value: str) -> str:
@@ -1211,6 +1267,237 @@ def _parse_admin(value: Any) -> AdminConfig:
     )
 
 
+def _parse_threat_detection(value: Any, base_dir: Path) -> ThreatDetectionConfig:
+    where = "threat_detection"
+    raw = _object(
+        value,
+        where,
+        {
+            "enabled",
+            "mode",
+            "window_seconds",
+            "min_requests",
+            "min_distinct_paths",
+            "min_violations",
+            "score_threshold",
+            "confirm_score",
+            "confirm_after_seconds",
+            "containment_seconds",
+            "confirmed_containment_seconds",
+            "throttle_ms",
+            "max_throttle_ms",
+            "tarpit_hold_seconds",
+            "max_tarpit_hold_seconds",
+            "per_actor_tarpit_slots",
+            "global_tarpit_slots",
+            "max_tracked_actors",
+            "max_paths_per_actor",
+            "alert_cooldown_seconds",
+            "mark_ttl_seconds",
+            "offender_path",
+        },
+    )
+    enabled = _bool(raw.get("enabled"), f"{where}.enabled", False)
+    mode = _string(raw.get("mode"), f"{where}.mode", "monitor", 6, 8).lower()
+    if mode not in {"monitor", "throttle", "tarpit", "block"}:
+        raise ConfigError(f"{where}.mode must be monitor, throttle, tarpit, or block")
+    score_threshold = _int(raw.get("score_threshold"), f"{where}.score_threshold", 70, 1, 100)
+    confirm_score = _int(raw.get("confirm_score"), f"{where}.confirm_score", 85, 1, 100)
+    if confirm_score < score_threshold:
+        raise ConfigError(f"{where}.confirm_score must not be below score_threshold")
+    containment = _number(raw.get("containment_seconds"), f"{where}.containment_seconds", 300.0, 1.0, 86400.0)
+    confirmed_containment = _number(
+        raw.get("confirmed_containment_seconds"),
+        f"{where}.confirmed_containment_seconds",
+        900.0,
+        1.0,
+        86400.0,
+    )
+    if confirmed_containment < containment:
+        raise ConfigError(f"{where}.confirmed_containment_seconds must not be below containment_seconds")
+    throttle_ms = _int(raw.get("throttle_ms"), f"{where}.throttle_ms", 750, 0, 60000)
+    max_throttle_ms = _int(raw.get("max_throttle_ms"), f"{where}.max_throttle_ms", 3000, 0, 60000)
+    if max_throttle_ms < throttle_ms:
+        raise ConfigError(f"{where}.max_throttle_ms must not be below throttle_ms")
+    tarpit_hold = _number(raw.get("tarpit_hold_seconds"), f"{where}.tarpit_hold_seconds", 15.0, 1.0, 120.0)
+    max_tarpit_hold = _number(
+        raw.get("max_tarpit_hold_seconds"),
+        f"{where}.max_tarpit_hold_seconds",
+        30.0,
+        1.0,
+        300.0,
+    )
+    if max_tarpit_hold < tarpit_hold:
+        raise ConfigError(f"{where}.max_tarpit_hold_seconds must not be below tarpit_hold_seconds")
+    per_actor_slots = _int(raw.get("per_actor_tarpit_slots"), f"{where}.per_actor_tarpit_slots", 4, 1, 64)
+    global_slots = _int(raw.get("global_tarpit_slots"), f"{where}.global_tarpit_slots", 16, 1, 256)
+    if global_slots < per_actor_slots:
+        raise ConfigError(f"{where}.global_tarpit_slots must not be below per_actor_tarpit_slots")
+    return ThreatDetectionConfig(
+        enabled=enabled,
+        mode=mode,
+        window_seconds=_number(raw.get("window_seconds"), f"{where}.window_seconds", 10.0, 1.0, 3600.0),
+        min_requests=_int(raw.get("min_requests"), f"{where}.min_requests", 10, 1, 100000),
+        min_distinct_paths=_int(raw.get("min_distinct_paths"), f"{where}.min_distinct_paths", 6, 1, 10000),
+        min_violations=_int(raw.get("min_violations"), f"{where}.min_violations", 3, 1, 10000),
+        score_threshold=score_threshold,
+        confirm_score=confirm_score,
+        confirm_after_seconds=_number(
+            raw.get("confirm_after_seconds"),
+            f"{where}.confirm_after_seconds",
+            300.0,
+            1.0,
+            86400.0,
+        ),
+        containment_seconds=containment,
+        confirmed_containment_seconds=confirmed_containment,
+        throttle_ms=throttle_ms,
+        max_throttle_ms=max_throttle_ms,
+        tarpit_hold_seconds=tarpit_hold,
+        max_tarpit_hold_seconds=max_tarpit_hold,
+        per_actor_tarpit_slots=per_actor_slots,
+        global_tarpit_slots=global_slots,
+        max_tracked_actors=_int(raw.get("max_tracked_actors"), f"{where}.max_tracked_actors", 10000, 16, 1000000),
+        max_paths_per_actor=_int(raw.get("max_paths_per_actor"), f"{where}.max_paths_per_actor", 64, 4, 1024),
+        alert_cooldown_seconds=_number(
+            raw.get("alert_cooldown_seconds"),
+            f"{where}.alert_cooldown_seconds",
+            60.0,
+            1.0,
+            86400.0,
+        ),
+        mark_ttl_seconds=_number(raw.get("mark_ttl_seconds"), f"{where}.mark_ttl_seconds", 86400.0, 60.0, 604800.0),
+        offender_path=_resolve_path(
+            _string(raw.get("offender_path"), f"{where}.offender_path", "offenders.json", 1, 4096),
+            base_dir,
+            f"{where}.offender_path",
+            reject_symlink=True,
+        ),
+    )
+
+
+def _parse_ddos_detection(value: Any) -> DdosDetectionConfig:
+    where = "ddos_detection"
+    raw = _object(
+        value,
+        where,
+        {
+            "enabled",
+            "window_seconds",
+            "request_rate_threshold",
+            "global_rejection_ratio",
+            "connection_saturation",
+            "tls_failure_threshold",
+            "upstream_error_ratio",
+            "min_signals",
+            "cooldown_seconds",
+            "escalation_seconds",
+            "recovery_seconds",
+        },
+    )
+    return DdosDetectionConfig(
+        enabled=_bool(raw.get("enabled"), f"{where}.enabled", False),
+        window_seconds=_number(raw.get("window_seconds"), f"{where}.window_seconds", 10.0, 1.0, 300.0),
+        request_rate_threshold=_number(
+            raw.get("request_rate_threshold"),
+            f"{where}.request_rate_threshold",
+            500.0,
+            0.1,
+            1000000.0,
+        ),
+        global_rejection_ratio=_number(
+            raw.get("global_rejection_ratio"),
+            f"{where}.global_rejection_ratio",
+            0.2,
+            0.0,
+            1.0,
+        ),
+        connection_saturation=_number(
+            raw.get("connection_saturation"),
+            f"{where}.connection_saturation",
+            0.85,
+            0.0,
+            1.0,
+        ),
+        tls_failure_threshold=_int(
+            raw.get("tls_failure_threshold"),
+            f"{where}.tls_failure_threshold",
+            20,
+            1,
+            1000000,
+        ),
+        upstream_error_ratio=_number(
+            raw.get("upstream_error_ratio"),
+            f"{where}.upstream_error_ratio",
+            0.05,
+            0.0,
+            1.0,
+        ),
+        min_signals=_int(raw.get("min_signals"), f"{where}.min_signals", 2, 1, 5),
+        cooldown_seconds=_number(raw.get("cooldown_seconds"), f"{where}.cooldown_seconds", 60.0, 1.0, 3600.0),
+        escalation_seconds=_number(
+            raw.get("escalation_seconds"),
+            f"{where}.escalation_seconds",
+            300.0,
+            1.0,
+            86400.0,
+        ),
+        recovery_seconds=_number(
+            raw.get("recovery_seconds"),
+            f"{where}.recovery_seconds",
+            30.0,
+            1.0,
+            86400.0,
+        ),
+    )
+
+
+def _parse_alerting(value: Any) -> AlertingConfig:
+    where = "alerting"
+    raw = _object(
+        value,
+        where,
+        {
+            "enabled",
+            "webhook_url_env",
+            "auth_token_env",
+            "timeout_seconds",
+            "max_queue",
+            "cooldown_seconds",
+            "include_client_ip",
+            "allow_http",
+        },
+    )
+    webhook_url_env = _string(
+        raw.get("webhook_url_env"),
+        f"{where}.webhook_url_env",
+        "HIGHWALL_ALERT_WEBHOOK",
+        1,
+        128,
+    )
+    auth_token_env = _string(
+        raw.get("auth_token_env"),
+        f"{where}.auth_token_env",
+        "HIGHWALL_ALERT_TOKEN",
+        1,
+        128,
+    )
+    if not _ENV_NAME_RE.fullmatch(webhook_url_env):
+        raise ConfigError(f"{where}.webhook_url_env must be a valid environment variable name")
+    if not _ENV_NAME_RE.fullmatch(auth_token_env):
+        raise ConfigError(f"{where}.auth_token_env must be a valid environment variable name")
+    return AlertingConfig(
+        enabled=_bool(raw.get("enabled"), f"{where}.enabled", False),
+        webhook_url_env=webhook_url_env,
+        auth_token_env=auth_token_env,
+        timeout_seconds=_number(raw.get("timeout_seconds"), f"{where}.timeout_seconds", 3.0, 0.1, 60.0),
+        max_queue=_int(raw.get("max_queue"), f"{where}.max_queue", 256, 1, 65536),
+        cooldown_seconds=_number(raw.get("cooldown_seconds"), f"{where}.cooldown_seconds", 60.0, 1.0, 86400.0),
+        include_client_ip=_bool(raw.get("include_client_ip"), f"{where}.include_client_ip", False),
+        allow_http=_bool(raw.get("allow_http"), f"{where}.allow_http", False),
+    )
+
+
 def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, item in pairs:
@@ -1237,7 +1524,22 @@ def _reject_deep_json(value: Any) -> None:
 
 
 def parse_config(data: Any, base_dir: Path | str = ".", source: Path | None = None) -> Config:
-    raw = _object(data, "root", {"version", "server", "upstream", "policy", "rate_limit", "audit", "admin"})
+    raw = _object(
+        data,
+        "root",
+        {
+            "version",
+            "server",
+            "upstream",
+            "policy",
+            "rate_limit",
+            "audit",
+            "admin",
+            "threat_detection",
+            "ddos_detection",
+            "alerting",
+        },
+    )
     if raw.get("version") != 1:
         raise ConfigError("root.version must be 1")
     base = Path(base_dir).resolve(strict=False)
@@ -1247,6 +1549,9 @@ def parse_config(data: Any, base_dir: Path | str = ".", source: Path | None = No
     rate_limit = _parse_rate_limit(raw.get("rate_limit", {}))
     audit = _parse_audit(raw.get("audit", {}), base)
     admin = _parse_admin(raw.get("admin", {}))
+    threat_detection = _parse_threat_detection(raw.get("threat_detection", {}), base)
+    ddos_detection = _parse_ddos_detection(raw.get("ddos_detection", {}))
+    alerting = _parse_alerting(raw.get("alerting", {}))
     if admin.enabled and admin.listen_port == server.listen_port:
         raise ConfigError("admin listener must not reuse the proxy port")
     for route in policy.routes:
@@ -1263,6 +1568,9 @@ def parse_config(data: Any, base_dir: Path | str = ".", source: Path | None = No
         rate_limit=rate_limit,
         audit=audit,
         admin=admin,
+        threat_detection=threat_detection,
+        ddos_detection=ddos_detection,
+        alerting=alerting,
     )
 
 

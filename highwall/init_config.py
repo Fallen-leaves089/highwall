@@ -119,6 +119,14 @@ def build_initial_config(
         },
         "audit": {"path": audit_path, "path_mode": "redact"},
         "admin": {"enabled": False},
+        "threat_detection": {
+            "enabled": False,
+            "mode": "monitor",
+            "containment_seconds": 300,
+            "confirmed_containment_seconds": 900,
+        },
+        "ddos_detection": {"enabled": False},
+        "alerting": {"enabled": False},
     }
     parse_config(data, base_dir)
     return data
