@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import Config, ConfigError, load_config
+from .config import ConfigError, load_config
 from .proxy import GatewayServer, build_tls_context
+from .reload_fields import reload_error
 from .runtime import Runtime
 
 _LOG = logging.getLogger(__name__)
@@ -29,27 +30,6 @@ class ReloadResult:
         if self.error:
             result["error"] = self.error
         return result
-
-
-def _reloadable_error(old: Config, new: Config) -> str | None:
-    immutable = (
-        ("server.listen_host", old.server.listen_host, new.server.listen_host),
-        ("server.listen_port", old.server.listen_port, new.server.listen_port),
-        ("server.max_connections", old.server.max_connections, new.server.max_connections),
-        (
-            "server.max_inflight_requests",
-            old.server.max_inflight_requests,
-            new.server.max_inflight_requests,
-        ),
-        ("server.tls.enabled", old.server.tls.enabled, new.server.tls.enabled),
-        ("admin.enabled", old.admin.enabled, new.admin.enabled),
-        ("admin.listen_host", old.admin.listen_host, new.admin.listen_host),
-        ("admin.listen_port", old.admin.listen_port, new.admin.listen_port),
-    )
-    changed = [name for name, old_value, new_value in immutable if old_value != new_value]
-    if not changed:
-        return None
-    return "reload cannot change listener fields: " + ", ".join(changed) + "; restart required"
 
 
 def _safe_reload_error(exc: Exception) -> str:
@@ -75,7 +55,7 @@ class ServerController:
             old_runtime = self.gateway.runtime
             try:
                 new_config = load_config(self.config_path)
-                problem = _reloadable_error(old_runtime.config, new_config)
+                problem = reload_error(old_runtime.config, new_config)
                 if problem is not None:
                     raise ConfigError(problem)
                 new_tls_context = build_tls_context(new_config)

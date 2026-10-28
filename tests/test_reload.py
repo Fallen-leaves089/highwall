@@ -13,7 +13,13 @@ from highwall.config import load_config
 from highwall.control import ServerController
 from highwall.proxy import GatewayServer
 from highwall.runtime import Runtime
-from tests.support import StubUpstream, build_request, free_port, parse_response, send_raw
+from tests.support import (
+    StubUpstream,
+    build_request,
+    free_port,
+    parse_response,
+    send_raw,
+)
 
 
 def _config_data(upstream_port: int, hosts: list[str], *, listen_port: int = 18090) -> dict:

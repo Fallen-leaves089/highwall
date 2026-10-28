@@ -6,9 +6,9 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代理与防护网关**。它只使用 Python 标准库，目标是把应用入口处最容易出现分歧的解析、策略、资源限制和审计做成可审计的小内核。
 
-当前版本：`0.9.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标。它仍不是已经完成第三方审计的生产级产品。
+当前源码版本：`0.10.0`（最新已发布版本仍为 `0.9.0`）。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明，并收紧查询参数与 JSON body 中的路径穿越识别（含多重编码）。它仍不是已经完成第三方审计的生产级产品。
 
-> **v0.9 重点**：原子配置重载、失败保留旧配置、TLS 证书轮换和优雅排空停机。操作步骤见 [配置热加载与优雅停机](#配置热加载与优雅停机)。
+> **v0.10 重点**：上线前用 `highwall diff` 区分可热加载、必须重启和安全降级；CI 与发布镜像增加可复现的静态检查、来源证明和签名。热加载细节见 [配置热加载与优雅停机](#配置热加载与优雅停机)。
 
 ## 目录
 
@@ -20,6 +20,7 @@ HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代
 - [威胁防护快速启用](#威胁防护快速启用)
 - [快速开始](#快速开始)
 - [配置要点](#配置要点)
+- [配置变更检查](#配置变更检查)
 - [常见问题与排查](#常见问题与排查)
 - [部署原则](#部署原则)
 - [测试与冒烟](#测试与冒烟)
@@ -30,12 +31,14 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 
 - **fail-closed**：解析歧义、配置错误或上游失败时返回错误，不静默放行。
 - **零第三方运行时依赖**：核心代理只使用 Python 标准库，便于审计和小规模部署。
-- **可验证**：自带测试、`highwall check` / `inspect`、本地 quickstart 和 JSONL 审计。
+- **可验证**：自带测试、`highwall check` / `inspect` / `diff`、本地 quickstart 和 JSONL 审计。
 
 - 适合：给内部服务、静态站、管理面或小型 API 增加一层入口防护。
 - 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
 
-> HighWall 仍是 `0.9.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+> HighWall 仍是 `0.10.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+
+> **防护边界**：WAF、DLP、行为评分和蜜罐都是降低暴露面的启发式，不是认证或安全边界；同主机、同命名空间或已失陷客户端无法靠它们区分，DLP 也不能承诺“防泄漏”。
 
 ## 30 秒演示
 
@@ -213,6 +216,8 @@ DDoS 告警应接入 NOC/值班系统，并在 5 分钟窗口内完成：确认 
 
 `monitor` 不会慢速或阻断请求，但达到 `confirmed` 后仍会写入 `offenders.json`，以便重启后继续关联风险；若当前阶段完全不想产生持久标记，请先不要启用 `threat_detection`，或把 `offender_path` 指向单独的临时目录。
 
+`threat_detection.agent_mode` 默认 `score`：请求呈现明显的脚本/Agent 特征（自动化 UA、缺少浏览器头、无 Cookie、节奏规律、单路径聚焦或同路径参数扫描）时只加分。企业需要直接处置时，只改这一行：`block` 按来源 IP 封禁，`throttle` 按当前指纹/请求形状限流；该开关不依赖 `rate_limit.auto_ban_threshold`。`throttle` 不是 IP 级封禁，轮换 UA 或请求形状可能重新获得干净配额；需要强处置明显 Agent 时选 `block`。`agent_min_signals` 默认 3，`agent_score` 默认 30。
+
 把以下关键字段合并到现有配置中（片段不能单独作为完整配置）：
 
 ```json
@@ -281,7 +286,7 @@ HighWall 是 L7 网关，不是“绝对高防”：
 - **不能防勒索软件或擦除型攻击**。L7 网关无法阻止拥有主机写权限的进程删除文件；必须依赖低权限账户、受控文件夹、EDR、离线/不可变备份和恢复演练。
 - **不能替代主机防火墙或网络分段**：客户端 CIDR ACL 只处理已经到达 HighWall 的 HTTP 请求，不处理 DNS 隧道、RPC、原始套接字或其他非 HTTP 流量。
 - `read_only` 只按 HTTP 方法阻断 `POST`/`PUT`/`PATCH`/`DELETE`，无法识别通过 `GET` 触发副作用的错误业务设计。
-- 完整性钉扎只覆盖配置中精确匹配的静态 `GET` 路径和状态码，不覆盖查询串、动态页面、HEAD、WebSocket 或流式响应。
+- 完整性钉扎只覆盖配置中精确匹配的静态 `GET` 路径和状态码；查询串不参与匹配，也不会因为加了 query 就绕过校验。它不覆盖 HEAD、动态页面、响应头、WebSocket 或流式响应。
 - 蜜罐只覆盖显式配置的精确路径，不能发现所有扫描；它可能被指纹识别，误触封禁会影响共享 NAT 来源，也不提供高交互 shell、文件落盘或反制能力。
 - 熔断器会在上游连续故障时主动返回 503；它是故障隔离，不是 DDoS 清洗或容量保证。
 - 持久标记可能因共享 NAT、代理池或刻意模仿正常浏览器而产生误报；默认先 `monitor`，并保护 `offenders.json` 不被未授权修改或删除。
@@ -381,7 +386,7 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 ## 容器镜像
 
-版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.9.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.9.0)。
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.9.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.9.0)。最新已发布镜像仍是 `0.9.0`；`v0.10.0` tag 发布后，工作流才会为该镜像生成 cosign 签名和 GitHub provenance attestation。`0.9.0` 镜像没有这些新增证明，不能反向声称已签名。
 
 ```bash
 docker pull ghcr.io/fallen-leaves089/highwall:0.9.0
@@ -417,6 +422,16 @@ docker run --rm --name highwall \
 - 生产环境启用 TLS 时，把证书和私钥只读挂载到容器内，并在配置中使用容器内路径。
 - 不要暴露管理面端口；管理面默认关闭，开启后也应只在受控网络内访问。
 - `latest` 跟随最近发布的版本标签；生产部署应固定版本号。
+- `v0.10.0` 及之后发布的镜像可用以下命令验证构建来源和签名；验证时把版本号替换为实际部署的不可变 tag：
+
+```bash
+gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.10.0 \
+  --repo Fallen-leaves089/highwall
+
+cosign verify ghcr.io/fallen-leaves089/highwall:0.10.0 \
+  --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ## 配置要点
 
@@ -427,7 +442,7 @@ docker run --rm --name highwall \
 - `policy.waf_mode`：`detect` 只记录命中，`block` 直接拒绝。第一次接入未知业务建议用 `detect`。
 - `policy.trusted_proxies`：只有 HighWall 确实在可信反向代理后面时才填写；不要填写 `0.0.0.0/0`。
 - `policy.allowed_client_networks` / `denied_client_networks`：可选的 CIDR ACL，拒绝优先；空列表表示不按来源网段过滤。它是 L7 判据，不替代主机防火墙。
-- `policy.allowed_origins`：可选的规范 Origin 白名单，例如 `https://app.example.com`。配置后，`POST`/`PUT`/`PATCH`/`DELETE` 必须带允许的 Origin，跨站写请求会被拒绝；为空时保持原来的非浏览器兼容行为。
+- `policy.allowed_origins`：可选的规范 Origin 白名单，例如 `https://app.example.com`。配置后，`POST`/`PUT`/`PATCH`/`DELETE` 必须带允许的 Origin，跨站写请求会被拒绝；为空时保持原来的非浏览器兼容行为。浏览器跨域写请求会先发 `OPTIONS` 预检，启用该白名单时要把 `OPTIONS` 加入 `allowed_methods`，并确认上游能响应预检。
 - `policy.read_only`：全局只读开关；`routes[].read_only` 只对命中的最长路径前缀生效。它不识别 GET 副作用。
 - `policy.routes`：按最长路径前缀选择；可设置 `methods`、`read_only`、`max_body_bytes`、`max_concurrent`、`rate`、`rate_burst` 和 `allowed_client_networks`。路由方法必须是全局 `allowed_methods` 的子集，空路由来源列表会被拒绝而不是静默放行；`rate` 是每客户端每秒令牌数，`rate_burst` 省略时取速率向上取整。
 - `policy.honeypot`：默认关闭；启用后按规范化后的精确路径拦截诱饵，支持内置 `presets` 或自定义 `routes`、静态状态码、Content-Type、Body、受限响应头、服务端标识、首击封禁和 0–5000 ms 拖延。命中不访问上游，并绕过普通方法/Content-Type/WAF/只读限制以保留诱捕效果；Host 和客户端 ACL 仍然优先。
@@ -439,20 +454,45 @@ docker run --rm --name highwall \
 - `policy.response_scan_mode` / `response_scan_max_bytes` / `response_scan_headers`：上游响应的秘密/调试信息扫描，分别支持 `off`、`detect`、`block`；只扫描有界前缀，默认 1 MiB。媒体类型不再作为免扫条件，并尝试 UTF-8/Latin-1/UTF-16 解码；响应头默认参与扫描，`Set-Cookie` 固定排除。
 - `server.max_connections_per_ip`：单个来源 IP 的并发连接上限；`0` 关闭限制，可信代理来源不计入。它不能替代总连接上限。
 - `policy.routes[].max_concurrent`：路由级在途请求上限，`0` 表示关闭，不能超过 `server.max_connections`；超限返回 503 和 `Retry-After`。
-- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`：在时间窗内累计协议或策略错误后临时拒绝该来源；`threshold=0` 关闭。封禁状态只在内存中，重启即清空。
-- `threat_detection`：多信号攻击者指纹、两阶段确认、慢速槽位和持久标记。`enabled` 默认关闭；建议先 `mode=monitor`，再切 `tarpit`。`containment_seconds=300` 是疑似窗口，`confirmed_containment_seconds=900` 是确认后的持续慢速窗口；`offender_path` 必须是受保护的可写路径。
+- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`：在时间窗内累计协议或策略错误后临时拒绝该来源；`threshold=0` 关闭这条“错误累计”自动封禁路径，但不关闭 `threat_detection.agent_mode=block` 的定向封禁。封禁状态只在内存中，重启即清空。
+- `threat_detection`：多信号攻击者指纹、两阶段确认、慢速槽位和持久标记。`enabled` 默认关闭；建议先 `mode=monitor`，再切 `tarpit`。`agent_mode` 默认 `score`（只加分），可改为 `block` 或 `throttle` 来直接处置明显自动化：`block` 封来源 IP，`throttle` 只限制当前指纹，换请求形状可能绕过限速。`containment_seconds=300` 是疑似窗口，`confirmed_containment_seconds=900` 是确认后的持续慢速窗口；`offender_path` 必须是受保护的可写路径。
 - `ddos_detection`：L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误的多信号聚合；`escalation_seconds=300` 表示持续 5 分钟才升级告警，`recovery_seconds` 控制恢复事件。它不会自动清洗带宽型 DDoS。
 - `alerting`：异步 Webhook 告警。`enabled=true` 时 `HIGHWALL_ALERT_WEBHOOK` 必须存在且默认为 HTTPS；可选 `HIGHWALL_ALERT_TOKEN`。`include_client_ip` 默认 `false`，`allow_http` 默认 `false`。队列满会丢弃并增加 `alert_dropped_total`，不会阻塞请求。
 - `upstream.total_timeout`：整个上游交换（连接、响应头、响应体）的绝对上限；`read_timeout` 是单次读取上限。
 - `server.tls`：只做服务端 TLS，不替代上游 TLS 校验；证书和私钥路径按配置文件所在目录解析。握手在工作线程内执行并受 `handshake_timeout` 约束，慢握手不会阻塞新的 accept；TLS 启用且未配置 HSTS 时会自动添加一年期 HSTS。替换证书文件或路径后可通过 `POST /reload` 让新握手使用新证书。
-- `audit.path`：相对路径按配置文件目录解析；日志目录必须由服务账户和运维账户保护。`audit.path_mode` 支持 `redact`（默认）、`hash` 和 `exact`；默认模式会清洗/解码路径并脱敏敏感键、后续值和明显高熵段。
+- `audit.path`：相对路径按配置文件目录解析；日志目录必须由服务账户和运维账户保护。`audit.path_mode` 支持 `redact`（默认）、`hash` 和 `exact`；默认模式会清洗/解码路径并脱敏敏感键、后续值和明显高熵段。`audit.on_write_failure` 默认 `fail_closed`：运行期写失败后，从下一次请求起返回 503；设为 `continue` 则只计数并继续。启动时路径不可写会直接拒绝启动。
 - `admin.enabled`：默认关闭；打开后强制回环监听和 token。管理面提供 `/healthz`、`/metrics`、`/offenders`、`/audit/tail` 和受保护的 `POST /reload`。
 
 完整示例见 [`config.example.json`](config.example.json)。蜜罐配置见 [`docs/HONEYPOT.md`](docs/HONEYPOT.md)，威胁边界见 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)，部署基线见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)，漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。
 
+## 配置变更检查
+
+`highwall check --strict` 在普通校验之外检查高危配置开关：只有 `high` 级告警会让退出码变为 `4`，`medium` 级仍只打印 warning。建议在企业 CI 中启用，避免以下组合悄悄进入生产：`trusted_proxies` 非空、打开分号路径参数/尾随点空格、关闭编码分隔符或重复头拒绝、关闭 WAF、配置了完整性钉扎却关闭强制检查、审计写入失败改为 `continue`。
+
+`highwall check` 只回答“候选配置能否启动”；`highwall diff` 比较两份配置解析、默认值展开和路径规范化后的**实际生效值**，并回答“切换后哪些字段会变、需要重启还是可热加载、是否削弱了现有安全控制”。比较不含管理 token、Webhook token 等秘密值，只保留环境变量名。
+
+```powershell
+python -m highwall diff -c config.json --candidate config.next.json
+python -m highwall diff -c config.json --candidate config.next.json --json
+```
+
+候选配置会经过完整加载和 TLS/管理 token 检查；无效配置返回 `2`，不会进入比较。排序差异（例如 Host、方法、CIDR 白名单顺序）不会产生虚假变更。
+
+| 退出码 | 含义 | 建议动作 |
+|---|---|---|
+| `0` | 没有生效值变化 | 可继续其他验收 |
+| `1` | 只有可热加载变化，且未检测到安全降级 | 评审 `security_review` 后通过 `SIGHUP` 或 `POST /reload` 应用 |
+| `2` | 配置无效或命令行错误 | 修复配置，不启动、不重载 |
+| `3` | 存在必须重启的字段；未检测到阻断性安全降级 | 安排滚动重启并复核变更 |
+| `4` | 检测到安全降级 | 默认阻止晋级；确认是受控变更后再调整策略 |
+
+安全降级包括关闭 WAF/DLP/限流/只读、关闭 TLS 或降低最低 TLS 版本、扩大 Host/方法/路径/CIDR/Origin 白名单、移除安全头或完整性钉扎、弱化威胁遏制模式，以及放宽路由方法、来源、请求体、并发或限速限制。上游目标、管理面启用、TLS 证书/私钥路径和审计路径变化会进入非阻断的 `security_review`，仍需人工确认。`diff` 是变更审阅工具，不是“配置已无漏洞”的证明。
+
 ## 配置热加载与优雅停机
 
 HighWall 支持原子配置重载和排空停机。重载会先完整加载、校验新配置，并构建新的运行时和 TLS 上下文；任一步失败都会保留旧配置和旧连接，进程继续服务。
+
+上线前先运行 `highwall diff`：退出码 `4` 应先按安全降级处理；退出码 `3` 表示本次变更不能只靠热加载，需要滚动重启。
 
 - POSIX 使用 `SIGHUP`；Windows 使用管理面 `POST /reload`（管理面需启用并携带 Bearer token）。
 - 可热更新策略、路由、上游、限流、审计、告警、威胁/DDOS 检测、管理 token、TLS 证书内容和路径、超时等。
@@ -483,7 +523,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 4. 上游放在回环或私有网段，并用主机防火墙限制“网关 -> 上游”和“运维 -> 管理面”。
 5. 生产环境启用 TLS，私钥权限只给服务账户；不要使用自签名证书对外。
 6. 保留现有网络隔离和用户/命名空间分离。HighWall 不能替代操作系统边界。
-7. 先运行 `highwall check` 和 `highwall inspect`，再启动服务；配置错误时进程应拒绝启动，而不是降级放行。
+7. 先运行 `highwall check`、`highwall inspect`；配置晋级前再运行 `highwall diff`。配置错误时进程应拒绝启动，而不是降级放行。
 8. 把审计日志持续外送或写入不可变存储；本机可写日志无法抵抗同权限攻击者。定期做离线恢复演练。
 9. 对高风险写接口优先做路由级只读、方法子集和来源限制；不要让 `GET` 承担删除、转账或改配置等副作用。
 10. 指纹/标记先以 `monitor` 观察，确认共享 NAT 和正常自动化流量没有误伤后再启用 `tarpit`；持久标记文件和审计文件使用同一级别的 ACL 保护。
@@ -493,10 +533,14 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 ```powershell
 Set-Location <HighWall checkout>
-python -m unittest discover -s tests -v
+python -m pip install -e ".[dev]"
+python -m ruff check highwall scripts tests
+python -m mypy
+python -m coverage run --branch -m unittest discover -s tests -v
+python -m coverage report
 ```
 
-测试只使用临时目录和临时回环端口，不会修改防火墙、端口转发或外部服务。
+测试只使用临时目录和临时回环端口，不会修改防火墙、端口转发或外部服务。`coverage report` 从 `pyproject.toml` 读取 80% 的行/分支覆盖率门槛；低于门槛时返回非零。
 
 只验证威胁检测、攻击者标记、慢速槽位、DDoS 状态机和 Webhook 队列：
 
@@ -507,11 +551,32 @@ python -m unittest tests.test_threat -v
 发布前建议再跑配置和语法检查：
 
 ```powershell
-python -m compileall -q highwall
+python -m compileall -q highwall scripts tests
 python -m highwall check -c config.example.json
+python -m highwall check -c config.example.json --strict
+python -m highwall diff -c config.example.json --candidate config.example.json
 ```
 
-当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、攻击者指纹/标记/慢速槽位、DDoS 状态机、告警去重与队列背压、管理面、配置生成/覆盖规则与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证 TLS 指纹关联、确认后慢速响应、上游零转发、审计落盘、漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
+解析器模糊测试使用确定性种子，只把 `HighWallError` 视为预期拒绝；其他异常、超时或崩溃会导致非零退出：
+
+```powershell
+python -m scripts.fuzz_parser --iterations 20000 --seed 20261028
+```
+
+fuzz 用于发现解析边界上的未处理异常和性能退化，不是形式化证明，也不替代代码审计。
+
+本地性能基线使用临时回环上游和临时端口，不需要外部服务：
+
+```powershell
+python -m scripts.benchmark_proxy
+python -m scripts.benchmark_proxy --json
+```
+
+脚本分别测量直连上游、经 HighWall 的允许请求和 WAF 拦截请求，输出 p50/p95/p99 与吞吐。数字会受当前机器负载、审计落盘、DLP/WAF 规则和 Python 版本影响，只能作为同机回归基线，不是容量 SLA 或采购承诺。
+
+当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、攻击者指纹/标记/慢速槽位、DDoS 状态机、告警去重与队列背压、管理面、配置生成/覆盖规则、配置 diff 的重启/安全降级分类与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证 TLS 指纹关联、确认后慢速响应、上游零转发、审计落盘、漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
+
+GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.12 上执行 Ruff、mypy、覆盖率与完整测试；CodeQL 每周和每次 PR 扫描；Dependabot 每周检查 Actions、Python 开发依赖和 Docker 基础镜像。所有第三方 Actions 固定到提交 SHA，发布镜像附带 SBOM、provenance、cosign 签名和 GitHub attestation。
 
 ## 开源许可
 

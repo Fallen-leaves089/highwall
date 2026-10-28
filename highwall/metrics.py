@@ -19,6 +19,7 @@ class Metrics:
             "upstream_errors_total": 0,
             "admin_requests_total": 0,
             "audit_write_failures_total": 0,
+    "audit_unavailable": 0,
             "ip_connection_rejections_total": 0,
             "inflight_rejections_total": 0,
             "route_rate_limit_rejections_total": 0,

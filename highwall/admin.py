@@ -109,12 +109,21 @@ class AdminHandler(BaseHTTPRequestHandler):
             )
         )
 
-    def _respond(self, status: int, content_type: str, body: bytes, head_only: bool = False) -> None:
+    def _respond(
+        self,
+        status: int,
+        content_type: str,
+        body: bytes,
+        head_only: bool = False,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         self.close_connection = True
         try:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
+            for name, value in (extra_headers or {}).items():
+                self.send_header(name, value)
             self._security_headers()
             self.end_headers()
             if not head_only and body:
@@ -125,12 +134,25 @@ class AdminHandler(BaseHTTPRequestHandler):
         finally:
             self._audit(status, urllib.parse.urlsplit(self.path).path)
 
-    def _json(self, status: int, value: Any, head_only: bool = False) -> None:
+    def _json(
+        self,
+        status: int,
+        value: Any,
+        head_only: bool = False,
+        extra_headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(value, ensure_ascii=True, separators=(",", ":")).encode("utf-8")
-        self._respond(status, "application/json; charset=utf-8", body, head_only)
+        self._respond(status, "application/json; charset=utf-8", body, head_only, extra_headers)
 
-    def _error(self, status: int, code: str, head_only: bool = False) -> None:
-        self._json(status, {"error": code}, head_only)
+    def _error(
+        self,
+        status: int,
+        code: str,
+        head_only: bool = False,
+        allow: tuple[str, ...] | None = None,
+    ) -> None:
+        extra = {"Allow": ", ".join(allow)} if allow else None
+        self._json(status, {"error": code}, head_only, extra)
 
     def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
         self._error(int(code), "request_rejected")
@@ -151,7 +173,8 @@ class AdminHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
         if not method_allowed and not (self.command == "POST" and path == "/reload"):
-            self._error(405, "method_not_allowed", head_only)
+            allow = ("POST",) if path == "/reload" else ("GET", "HEAD")
+            self._error(405, "method_not_allowed", head_only, allow)
             return
         if path == "/healthz":
             if parsed.query:
@@ -188,7 +211,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/reload":
             if self.command != "POST":
-                self._error(405, "method_not_allowed", head_only)
+                self._error(405, "method_not_allowed", head_only, ("POST",))
                 return
             if (
                 parsed.query
@@ -335,7 +358,13 @@ class AdminServer(ThreadingHTTPServer):
             self.runtime = runtime
             self.generation = self.generation + 1 if generation is None else int(generation)
 
-    def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def process_request(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        if not isinstance(request, socket.socket):
+            raise TypeError("expected a TCP socket")
         if not self._slots.acquire(blocking=False):
             try:
                 request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
@@ -350,13 +379,23 @@ class AdminServer(ThreadingHTTPServer):
             self._slots.release()
             raise
 
-    def process_request_thread(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def process_request_thread(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        if not isinstance(request, socket.socket):
+            raise TypeError("expected a TCP socket")
         try:
             super().process_request_thread(request, client_address)
         finally:
             self._slots.release()
 
-    def handle_error(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def handle_error(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
         _LOG.error("admin connection handler failed")
 
 

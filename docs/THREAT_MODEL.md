@@ -1,6 +1,6 @@
 # HighWall Threat Model
 
-版本：`0.9.0`
+版本：`0.10.0`
 范围：HighWall 进程及其 HTTP 入口、上游连接、审计和管理面。
 
 ## 1. 安全目标
@@ -119,7 +119,7 @@ untrusted client
 | 敏感路径探测 / 扫描器枚举 | 可选精确路径蜜罐：内置常见路径模板、本地静态响应、不访问上游、独立审计、首击封禁、可选有界拖延 | 只覆盖配置路径，可能被指纹识别；预设可能与真实业务路径冲突，首击封禁可能连带 NAT 来源，拖延不能替代速率限制 |
 | 管理 token 泄漏 | 仅回环、Bearer 校验、常量时间摘要比较、token 不进入 Runtime repr/审计 | 本机被攻陷、环境变量可读的攻击者仍可拿到 |
 | 管理面被外部访问 | 只允许 loopback listener；peer 和 Host 双重检查；不提供端口转发 | 运维错误地暴露端口会绕过假设 |
-| 快速自动化/AI 驱动攻击、短时间枚举 | HTTP Header 形状、TLS ClientHello 和 `/24`/`/64` 来源前缀多信号关联；疑似先限速 5 分钟，确认后写入有界标记并施加 15 分钟慢速窗口；慢速槽位按攻击者和全局限额 | 指纹可被伪造或轮换；共享 NAT 会误伤；客户端可关闭连接或并发重试；容量估算不是 SLA |
+| 快速自动化/AI 驱动攻击、短时间枚举 | Header 形状、TLS ClientHello 和来源前缀多信号关联；`agent_mode=score`（默认）只增加评分，不强制处置，企业可只将该字段改为 `block` 或 `throttle` 启用直接封禁/限流；疑似先限速 5 分钟，确认后写入有界标记并施加 15 分钟慢速窗口 | 指纹可被伪造或轮换；共享 NAT 会误伤；`score` 模式仍可能因累计分数触发通用 `mode`；`block` 按来源 IP 会连带 NAT；客户端可关闭连接或并发重试；容量估算不是 SLA |
 | L7 DDoS / 上游饱和 | 聚合请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误；多信号触发 `ddos_suspected`，300 秒后升级，恢复时发事件；异步 Webhook 通知 NOC | 只覆盖到达 HighWall 的 L7 信号，不识别真实来源；带宽型 L3/L4、SYN flood 和运营商侧拥塞不在范围内；主机饱和时可能先失去可达性 |
 | 持久标记被误用或篡改 | 标记只含派生指纹、分数、信号和可选来源；TTL、容量上限、原子写入、普通文件/符号链接检查；形状匹配只作为信号，不自动确认 | 共享出口、代理池和正常自动化可能被误标；能写数据目录的攻击者可删除或伪造标记；标记不是认证或永久封禁源 |
 | 告警载荷泄漏或丢失 | 默认不含路径、查询串、Cookie、Authorization、请求体或客户端 IP；HTTPS、Bearer token、禁止重定向、队列上限和失败重试 | 接收端日志和凭据仍需保护；队列满或网络故障会丢告警；Webhook 不能替代独立心跳 |
@@ -153,10 +153,13 @@ untrusted client
 - 蜜罐响应体、路由数、Header 数、延迟和封禁表均有上限；`ban_seconds=0` 必须明确关闭首击封禁。
 - 指纹只从 Header 形状、TLS ClientHello 和来源前缀派生；Cookie、Authorization、查询串、原始路径、请求体和 token 不进入指纹或持久标记；形状相同只增加 `shape_match` 信号，不能单独自动确认。
 - 疑似窗口默认 300 秒，确认窗口默认 900 秒；确认标记有 TTL 和容量上限，慢速槽位有单攻击者和全局限额，满槽返回 429 且不继续占用线程。
+- 自动化/Agent 信号默认只贡献 `agent_score`，不单独触发强制处置；只有 `agent_mode=block|throttle` 时才直接确认，且该选择不依赖 `rate_limit.auto_ban_threshold`。
+- 审计写入失败默认 fail-closed：启动时路径不可用直接拒绝启动；运行期写入失败后，后续请求返回 503 和 `HW-AUDIT-1001`，直到审计恢复。
 - 慢速通道由 HighWall 本地返回，不访问上游；从响应头发送完成到最后一个响应体分块完成按 `tarpit_hold_seconds` 调度，并受 `max_tarpit_hold_seconds` 约束。它只能拖慢读取完整响应的客户端，不能阻止攻击者关闭连接或轮换指纹。
 - DDoS 检测只对到达 HighWall 的 L7 信号做启发式聚合；`containment_window_seconds=300` 是建议响应窗口，不是自动清洗或可用性保证。
 - Webhook 使用有界异步队列和有限重试，不阻塞请求线程；告警发送失败、队列满或接收端不可用必须由外部心跳和值班流程补偿。
 - 配置、审计、证书路径不可用时启动失败，不降级为“全部放行”。
+- 残余风险：低频、慢速、白盒了解策略的定向 Agent 可能长期低于 `min_requests`、`min_distinct_paths` 和评分阈值；共享 NAT、代理池和 `/24`、`/64` 关联会扩大误伤或让攻击者混入正常来源；IP 加请求形状不是身份。WAF、DLP 和自动化/Agent 启发式都可能漏报或误报，必须结合应用认证、上游审计、外部速率控制和人工研判。
 
 ## 7. 明确不适用的场景
 
@@ -201,10 +204,15 @@ HighWall 只监听和检查 HTTP 流量。DNS 查询、原始套接字、RPC、�
 发布前至少执行：
 
 ```powershell
+python -m pip install -e ".[dev]"
 python -m compileall -q highwall
-python -m unittest discover -s tests -v
+python -m ruff check highwall scripts tests
+python -m mypy
+python -m coverage run --branch -m unittest discover -s tests -v
+python -m coverage report
 python -m highwall check -c config.example.json
+python -m highwall diff -c config.example.json --candidate config.example.json
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\host-audit.ps1 -Json
 ```
 
-测试必须只使用回环/临时端口；任何修改防火墙、端口转发、生产配置或外部上游的操作都需要单独确认。
+测试必须只使用回环/临时端口；任何修改防火墙、端口转发、生产配置或外部上游的操作都需要单独确认。`highwall diff` 只用于发现配置语义变化和安全控制降级，不能替代代码审计、依赖审计、渗透测试或部署环境验收。

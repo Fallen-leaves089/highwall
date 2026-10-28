@@ -83,7 +83,6 @@ class CircuitBreaker:
             return CircuitDecision(True, "half_open", self._generation)
 
     def record_success(self, token: int) -> bool:
-        now = self._clock()
         with self._lock:
             if token != self._generation:
                 return False

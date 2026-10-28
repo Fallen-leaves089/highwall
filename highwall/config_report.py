@@ -163,6 +163,7 @@ def build_config_report(config: Config) -> dict[str, Any]:
             "backup_count": config.audit.backup_count,
             "include_client_ip": config.audit.include_client_ip,
             "path_mode": config.audit.path_mode,
+            "on_write_failure": config.audit.on_write_failure,
         },
         "admin": {
             "enabled": config.admin.enabled,
@@ -174,6 +175,9 @@ def build_config_report(config: Config) -> dict[str, Any]:
         "threat_detection": {
             "enabled": config.threat_detection.enabled,
             "mode": config.threat_detection.mode,
+            "agent_mode": config.threat_detection.agent_mode,
+            "agent_min_signals": config.threat_detection.agent_min_signals,
+            "agent_score": config.threat_detection.agent_score,
             "window_seconds": config.threat_detection.window_seconds,
             "min_requests": config.threat_detection.min_requests,
             "min_distinct_paths": config.threat_detection.min_distinct_paths,

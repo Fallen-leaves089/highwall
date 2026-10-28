@@ -118,11 +118,12 @@ def build_initial_config(
             "response_scan_headers": True,
             "honeypot": honeypot,
         },
-        "audit": {"path": audit_path, "path_mode": "redact"},
+        "audit": {"path": audit_path, "path_mode": "redact", "on_write_failure": "fail_closed"},
         "admin": {"enabled": False},
         "threat_detection": {
             "enabled": False,
             "mode": "monitor",
+            "agent_mode": "score",
             "containment_seconds": 300,
             "confirmed_containment_seconds": 900,
         },

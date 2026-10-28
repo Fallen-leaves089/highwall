@@ -13,7 +13,7 @@ from highwall.metrics import Metrics
 from highwall.offenders import OffenderRegistry
 from highwall.protocol import RequestHead
 from highwall.threat import DdosDetector, ThreatDetector
-from highwall.tlsfingerprint import TLSProfile, parse_client_hello
+from highwall.tlsfingerprint import parse_client_hello
 from tests.support import base_config
 
 
@@ -28,6 +28,29 @@ def _head(target: str = "/ok", *, ua: str = "agent/1", cookie: str = "session=on
             ("Cookie", cookie),
             ("Accept", "text/html"),
         ),
+        content_length=0,
+        client_ip="127.0.0.1",
+    )
+
+
+def _agent_head(
+    target: str = "/scan",
+    *,
+    ua: str = "python-requests/2.32.0",
+    browser: bool = False,
+    cookie: bool = False,
+) -> RequestHead:
+    headers: list[tuple[str, str]] = [("Host", "test.local"), ("User-Agent", ua)]
+    if browser:
+        headers.append(("Accept-Language", "en-US,en;q=0.9"))
+        headers.append(("Sec-Fetch-Site", "none"))
+    if cookie:
+        headers.append(("Cookie", "session=one"))
+    return RequestHead(
+        method="GET",
+        target=target,
+        version="HTTP/1.1",
+        headers=tuple(headers),
         content_length=0,
         client_ip="127.0.0.1",
     )
@@ -165,6 +188,69 @@ class ThreatDetectorTests(unittest.TestCase):
         self.assertGreater(assessment.delay_ms, 0)
         self.assertIsNotNone(assessment.alert)
         self.assertEqual(assessment.alert["event"], "threat_suspected")
+
+    def test_agent_like_traffic_adds_score_without_forced_containment(self) -> None:
+        assessment = None
+        for index in range(8):
+            self.clock_value[0] += 1.0
+            assessment = self.detector.assess(_agent_head(f"/api/item?id={index}"), "203.0.113.8")
+        assert assessment is not None
+        self.assertIn("agent_like", assessment.signals)
+        self.assertFalse(assessment.ban_ip)
+        self.assertNotEqual(assessment.action, "block")
+
+    def test_agent_mode_block_contains_obvious_agent(self) -> None:
+        detector = ThreatDetector(
+            _threat_config(self.directory, agent_mode="block"),
+            Metrics(),
+            self.registry,
+            include_client_ip=False,
+            clock=lambda: self.clock_value[0],
+            wall_clock=lambda: 1_700_000_000 + self.clock_value[0],
+        )
+        assessment = None
+        for index in range(8):
+            self.clock_value[0] += 1.0
+            assessment = detector.assess(_agent_head(f"/api/item?id={index}"), "203.0.113.8")
+        assert assessment is not None
+        self.assertEqual(assessment.confidence, "confirmed")
+        self.assertEqual(assessment.action, "block")
+        self.assertTrue(assessment.ban_ip)
+        self.assertGreaterEqual(assessment.ban_seconds, 1.0)
+
+    def test_agent_mode_throttle_limits_obvious_agent(self) -> None:
+        detector = ThreatDetector(
+            _threat_config(self.directory, agent_mode="throttle"),
+            Metrics(),
+            self.registry,
+            include_client_ip=False,
+            clock=lambda: self.clock_value[0],
+            wall_clock=lambda: 1_700_000_000 + self.clock_value[0],
+        )
+        assessment = None
+        for index in range(8):
+            self.clock_value[0] += 1.0
+            assessment = detector.assess(_agent_head(f"/api/item?id={index}"), "203.0.113.8")
+        assert assessment is not None
+        self.assertEqual(assessment.action, "throttle")
+        self.assertEqual(assessment.delay_ms, 200)
+        self.assertFalse(assessment.ban_ip)
+
+    def test_browser_like_traffic_is_not_flagged_as_agent(self) -> None:
+        assessment = None
+        for index in range(8):
+            self.clock_value[0] += 0.7 + (index % 3) * 0.5
+            assessment = self.detector.assess(
+                _agent_head(
+                    f"/page/{index}",
+                    ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+                    browser=True,
+                    cookie=True,
+                ),
+                "203.0.113.8",
+            )
+        assert assessment is not None
+        self.assertNotIn("agent_like", assessment.signals)
 
     def test_violations_confirm_and_persist_mark(self) -> None:
         for index in range(4):

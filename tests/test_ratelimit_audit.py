@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from highwall.audit import AuditLogger, AuditRecord
 from highwall.config import ConfigError
@@ -82,6 +83,28 @@ class RateLimitTests(unittest.TestCase):
 
 
 class AuditTests(unittest.TestCase):
+    def test_audit_write_failure_fails_closed_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = base_config(Path(directory), 18080)
+            logger = AuditLogger(config.audit)
+            with mock.patch("os.write", side_effect=OSError("disk full")):
+                self.assertFalse(logger.write(AuditRecord(event="request_allowed", status=200)))
+            self.assertEqual(logger.writes_failed, 1)
+            self.assertTrue(logger.unavailable)
+
+    def test_audit_write_failure_can_continue_when_configured(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = base_config(
+                Path(directory),
+                18080,
+                overrides={"audit": {"on_write_failure": "continue"}},
+            )
+            logger = AuditLogger(config.audit)
+            with mock.patch("os.write", side_effect=OSError("disk full")):
+                self.assertFalse(logger.write(AuditRecord(event="request_allowed", status=200)))
+            self.assertEqual(logger.writes_failed, 1)
+            self.assertFalse(logger.unavailable)
+
     def test_query_secrets_are_not_logged(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             config = base_config(Path(directory), 18080)

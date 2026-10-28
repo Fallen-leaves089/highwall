@@ -25,15 +25,27 @@ from .errors import (
     BadGateway,
     GatewayTimeout,
     HighWallError,
+    MethodNotAllowed,
     RequestTimeout,
     ServiceUnavailable,
     TooManyRequests,
 )
 from .integrity import inspect_integrity
-from .protocol import RequestHead, discard_request_body, read_request_body, read_request_head
+from .protocol import (
+    RequestHead,
+    discard_request_body,
+    read_request_body,
+    read_request_head,
+)
 from .runtime import Runtime
 from .tlsfingerprint import TLSProfile, peek_tls_profile
-from .waf import HeadInspection, inspect_body, normalize_ip, resolve_client_ip, validate_head
+from .waf import (
+    HeadInspection,
+    inspect_body,
+    normalize_ip,
+    resolve_client_ip,
+    validate_head,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -362,7 +374,6 @@ def _clean_response_headers(
     runtime: Runtime,
     request_id: str,
 ) -> tuple[list[tuple[str, str]], int | None]:
-    config = runtime.config
     upstream_connection = _connection_tokens(response.headers)
     configured_security = {name.lower(): (name, value) for name, value in _effective_security_headers(runtime)}
     drop = set(_RESPONSE_STRIPPED) | upstream_connection | set(configured_security)
@@ -556,6 +567,8 @@ class ProxyHandler(socketserver.BaseRequestHandler):
             ("Content-Type", "text/html; charset=utf-8"),
             ("Cache-Control", "no-store"),
         ]
+        if isinstance(error, MethodNotAllowed) and error.allow:
+            headers.append(("Allow", ", ".join(error.allow)))
         present = {name.lower() for name, _ in headers}
         for name, value in _effective_security_headers(self._runtime):
             if name.lower() not in present:
@@ -676,6 +689,8 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 metrics.inc("waf_blocked_total")
             if (
                 runtime.auto_ban is not None
+                and runtime.config.rate_limit.enabled
+                and runtime.config.rate_limit.auto_ban_threshold > 0
                 and not banned_request
                 and not honeypot_hit
                 and not forwarded
@@ -781,6 +796,9 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 status = 0
                 return
             metrics.inc("requests_total")
+            if runtime.audit.unavailable:
+                metrics.set("audit_unavailable", 1.0)
+                raise ServiceUnavailable("audit log is unavailable", rule_id="HW-AUDIT-1001")
             phase = "rate_limit"
             client_ip = resolve_client_ip(head, policy)
             for banner in (runtime.auto_ban, runtime.honeypot_ban):
@@ -822,6 +840,10 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 )
                 fingerprint = assessment.fingerprint
                 shape_fingerprint = assessment.shape_fingerprint
+                if assessment.ban_ip and runtime.auto_ban is not None:
+                    runtime.auto_ban.force_ban(client_ip, max(1.0, assessment.ban_seconds))
+                    metrics.inc("auto_bans_total")
+                    metrics.set("auto_ban_entries", float(runtime.auto_ban.size()))
                 if assessment.alert is not None:
                     threat_alert = assessment.alert
                     runtime.emit_alert(
@@ -903,9 +925,12 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 if not self.server.acquire_route_slot(route_slot_key, inspection.route.max_concurrent):
                     route_slot_key = None
                     metrics.inc("route_concurrency_rejections_total")
-                    exc = ServiceUnavailable("route concurrency limit exceeded", rule_id="HW-ROUTE-1001")
-                    exc.retry_after = 1.0
-                    raise exc
+                    unavailable = ServiceUnavailable(
+                        "route concurrency limit exceeded",
+                        rule_id="HW-ROUTE-1001",
+                    )
+                    unavailable.retry_after = 1.0
+                    raise unavailable
             phase = "body"
             reader.reset_deadline(runtime.config.server.body_timeout)
             if inspection.honeypot is not None:
@@ -942,14 +967,17 @@ class ProxyHandler(socketserver.BaseRequestHandler):
             breaker = runtime.circuit_breaker
             breaker_token: int | None = None
             if breaker is not None:
-                decision = breaker.allow()
-                metrics.set("circuit_state", _CIRCUIT_STATE_CODES[decision.state])
-                if not decision.allowed:
+                circuit_decision = breaker.allow()
+                metrics.set("circuit_state", _CIRCUIT_STATE_CODES[circuit_decision.state])
+                if not circuit_decision.allowed:
                     metrics.inc("circuit_rejections_total")
-                    exc = ServiceUnavailable("upstream circuit is open", rule_id="HW-CB-1001")
-                    exc.retry_after = decision.retry_after
-                    raise exc
-                breaker_token = decision.token
+                    unavailable = ServiceUnavailable(
+                        "upstream circuit is open",
+                        rule_id="HW-CB-1001",
+                    )
+                    unavailable.retry_after = circuit_decision.retry_after
+                    raise unavailable
+                breaker_token = circuit_decision.token
             try:
                 response = upstream.request(
                     head,
@@ -1341,7 +1369,13 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             else:
                 self._route_counts[key] = current - 1
 
-    def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def process_request(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        if not isinstance(request, socket.socket):
+            raise TypeError("expected a TCP socket")
         runtime = self.runtime
         if self._draining.is_set():
             runtime.metrics.inc("drain_rejections_total")
@@ -1375,7 +1409,13 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             self._slots.release()
             raise
 
-    def process_request_thread(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def process_request_thread(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
+        if not isinstance(request, socket.socket):
+            raise TypeError("expected a TCP socket")
         runtime = self.runtime
         with self._connection_lock:
             pending = self._pending_ip_keys.pop(id(request), None)
@@ -1419,7 +1459,11 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
                 self._release_ip_slot(ip_key)
             self._slots.release()
 
-    def handle_error(self, request: socket.socket, client_address: tuple[str, int]) -> None:
+    def handle_error(
+        self,
+        request: socket.socket | tuple[bytes, socket.socket],
+        client_address: tuple[str, int],
+    ) -> None:
         _LOG.error("connection handler failed")
 
 

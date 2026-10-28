@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import ipaddress
 import hashlib
+import ipaddress
 import json
 import logging
 import os
@@ -150,6 +150,7 @@ class AuditLogger:
         self.path: Path = config.path
         self._lock = threading.Lock()
         self.writes_failed = 0
+        self.unavailable = False
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         self._check_regular_path()
         self._ensure_file()
@@ -232,6 +233,8 @@ class AuditLogger:
                 return True
             except OSError as exc:
                 self.writes_failed += 1
+                if self.config.on_write_failure == "fail_closed":
+                    self.unavailable = True
                 _LOG.error("audit write failed (%s)", type(exc).__name__)
                 return False
 

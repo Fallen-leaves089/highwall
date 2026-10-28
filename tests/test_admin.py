@@ -171,8 +171,9 @@ class AdminIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 404)
 
     def test_post_is_rejected(self) -> None:
-        status, _, _ = self.request("POST", "/metrics", token=self.token)
+        status, headers, _ = self.request("POST", "/metrics", token=self.token)
         self.assertEqual(status, 405)
+        self.assertEqual(dict((name.lower(), value) for name, value in headers).get("allow"), "GET, HEAD")
 
     def test_post_reload_requires_token_and_calls_callback(self) -> None:
         status, _, _ = self.request("POST", "/reload")
@@ -186,8 +187,9 @@ class AdminIntegrationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body), {"status": "reloaded", "generation": 3})
 
-        status, _, _ = self.request("GET", "/reload", token=self.token)
+        status, headers, _ = self.request("GET", "/reload", token=self.token)
         self.assertEqual(status, 405)
+        self.assertEqual(dict((name.lower(), value) for name, value in headers).get("allow"), "POST")
 
         status, _, _ = self.request("POST", "/reload?x=1", token=self.token)
         self.assertEqual(status, 400)
