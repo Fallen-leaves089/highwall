@@ -59,6 +59,12 @@ HighWall 尝试维持以下不变量：
 - 操作系统、Python、上游应用和证书保持更新；
 - 网络隔离、主机防火墙、用户/命名空间分离仍然存在。
 
+## Security drills
+
+维护者在隔离实验环境中执行过三轮授权黑盒演练，覆盖基线防护、开启蜜罐以及关闭蜜罐后的第二层防御。公开记录只保留范围、配置差异、结论和残余风险，省略靶场地址、凭据、flag、规则编号、精确阈值和可复用载荷。详见 [`docs/SECURITY-DRILLS.md`](docs/SECURITY-DRILLS.md)。
+
+演练是维护者自测，不是独立第三方审计，不能证明不存在漏洞。
+
 ## Non-goals and known limitations
 
 - 不是抗 DDoS 设备；没有流量清洗、SYN flood 防护或带宽保证。
