@@ -16,7 +16,7 @@ import time
 from dataclasses import dataclass
 from email.utils import formatdate
 from http import HTTPStatus
-from typing import Iterable
+from typing import Any, Iterable
 
 from .audit import AuditRecord
 from .config import Config, HoneypotRoute
@@ -459,7 +459,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         content_length: int | None = None,
         server_header: str = "HighWall",
     ) -> int:
-        runtime = self.server.runtime
+        runtime = self._runtime
         reason = _safe_reason("", status)
         lines = [f"HTTP/1.1 {status} {reason}"]
         lines.append(f"Date: {formatdate(usegmt=True)}")
@@ -497,7 +497,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         content_length: int | None = None,
         server_header: str = "HighWall",
     ) -> int:
-        runtime = self.server.runtime
+        runtime = self._runtime
         duration = max(0.0, min(float(duration_ms) / 1000.0, 60.0))
         reason = _safe_reason("", status)
         lines = [f"HTTP/1.1 {status} {reason}"]
@@ -557,7 +557,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
             ("Cache-Control", "no-store"),
         ]
         present = {name.lower() for name, _ in headers}
-        for name, value in _effective_security_headers(self.server.runtime):
+        for name, value in _effective_security_headers(self._runtime):
             if name.lower() not in present:
                 headers.append((name, value))
                 present.add(name.lower())
@@ -568,7 +568,14 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         return self._send(error.status, headers, body, method=method, content_length=len(body))
 
     def handle(self) -> None:
-        runtime = self.server.runtime
+        runtime, upstream = self.server.acquire_runtime()
+        self._runtime = runtime
+        try:
+            self._handle(runtime, upstream)
+        finally:
+            self.server.release_runtime(runtime)
+
+    def _handle(self, runtime: Runtime, upstream: "UpstreamProxy") -> None:
         policy = runtime.config.policy
         metrics = runtime.metrics
         request_id = secrets.token_hex(12)
@@ -944,7 +951,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                     raise exc
                 breaker_token = decision.token
             try:
-                response = self.server.upstream.request(
+                response = upstream.request(
                     head,
                     inspection,
                     body,
@@ -1064,6 +1071,12 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         self.tls_context = tls_context
         self.tls_enabled = tls_context is not None
         self.upstream = UpstreamProxy(runtime.config)
+        self.generation = 0
+        self._runtime_lock = threading.RLock()
+        self._runtime_refs: dict[int, tuple[Runtime, int]] = {}
+        self._retired_runtimes: dict[int, Runtime] = {}
+        self._alert_refs: dict[int, tuple[Any, int]] = {}
+        self._draining = threading.Event()
         self._slots = threading.BoundedSemaphore(runtime.config.server.max_connections)
         inflight = runtime.config.server.max_inflight_requests
         self._request_slots = threading.BoundedSemaphore(inflight) if inflight > 0 else None
@@ -1073,8 +1086,12 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         self._route_lock = threading.Lock()
         self._active_connections = 0
         self._connection_lock = threading.Lock()
+        self._drain_condition = threading.Condition(self._connection_lock)
+        self._active_sockets: set[socket.socket] = set()
+        self._pending_ip_keys: dict[int, tuple[socket.socket, str | None]] = {}
         self._tls_profiles: dict[tuple, TLSProfile | None] = {}
         self._tls_profile_lock = threading.Lock()
+        self._register_alert_dispatcher(runtime)
         try:
             if ipaddress.ip_address(address[0]).version == 6:
                 self.address_family = socket.AF_INET6
@@ -1085,6 +1102,126 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     def connection_load(self) -> float:
         with self._connection_lock:
             return min(1.0, self._active_connections / max(1, self.runtime.config.server.max_connections))
+
+    def acquire_runtime(self) -> tuple[Runtime, UpstreamProxy]:
+        with self._runtime_lock:
+            runtime = self.runtime
+            current = self._runtime_refs.get(id(runtime))
+            count = current[1] if current is not None else 0
+            self._runtime_refs[id(runtime)] = (runtime, count + 1)
+            return runtime, self.upstream
+
+    def _register_alert_dispatcher(self, runtime: Runtime) -> None:
+        dispatcher = runtime.alert_dispatcher
+        if dispatcher is None:
+            return
+        current = self._alert_refs.get(id(dispatcher))
+        count = current[1] if current is not None else 0
+        self._alert_refs[id(dispatcher)] = (dispatcher, count + 1)
+
+    def _release_alert_dispatcher(self, runtime: Runtime) -> None:
+        dispatcher = runtime.alert_dispatcher
+        if dispatcher is None:
+            return
+        close_dispatcher = None
+        with self._runtime_lock:
+            current = self._alert_refs.get(id(dispatcher))
+            if current is None:
+                return
+            _, count = current
+            if count <= 1:
+                self._alert_refs.pop(id(dispatcher), None)
+                close_dispatcher = dispatcher
+            else:
+                self._alert_refs[id(dispatcher)] = (dispatcher, count - 1)
+        if close_dispatcher is not None:
+            close_dispatcher.close()
+
+    def release_runtime(self, runtime: Runtime) -> None:
+        close_runtime = False
+        with self._runtime_lock:
+            current = self._runtime_refs.get(id(runtime))
+            if current is None:
+                return
+            _, count = current
+            if count <= 1:
+                self._runtime_refs.pop(id(runtime), None)
+                retired = self._retired_runtimes.pop(id(runtime), None)
+                if retired is not None:
+                    close_runtime = True
+            else:
+                self._runtime_refs[id(runtime)] = (runtime, count - 1)
+        if close_runtime:
+            self._release_alert_dispatcher(runtime)
+            runtime.close(close_alerts=False)
+
+    def reload(self, runtime: Runtime, tls_context: ssl.SSLContext | None) -> int:
+        close_runtime: Runtime | None = None
+        new_upstream = UpstreamProxy(runtime.config)
+        with self._runtime_lock:
+            old = self.runtime
+            if old is not runtime:
+                self._register_alert_dispatcher(runtime)
+            self.runtime = runtime
+            self.upstream = new_upstream
+            self.tls_context = tls_context
+            self.tls_enabled = tls_context is not None
+            self.generation += 1
+            if old is not runtime:
+                refs = self._runtime_refs.get(id(old))
+                if refs is None:
+                    close_runtime = old
+                else:
+                    self._retired_runtimes[id(old)] = old
+        if close_runtime is not None:
+            self._release_alert_dispatcher(close_runtime)
+            close_runtime.close(close_alerts=False)
+        return self.generation
+
+    def begin_drain(self) -> None:
+        self._draining.set()
+
+    @property
+    def draining(self) -> bool:
+        return self._draining.is_set()
+
+    def wait_for_drain(self, timeout: float) -> bool:
+        if timeout <= 0:
+            with self._connection_lock:
+                return self._active_connections == 0
+        deadline = time.monotonic() + timeout
+        with self._drain_condition:
+            while self._active_connections > 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._drain_condition.wait(remaining)
+            return True
+
+    def abort_connections(self) -> None:
+        with self._connection_lock:
+            sockets = list(self._active_sockets)
+        for connection in sockets:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                connection.close()
+            except OSError:
+                pass
+
+    def close_all_runtimes(self) -> None:
+        with self._runtime_lock:
+            current = self.runtime
+            retired = list(self._retired_runtimes.values())
+            self._retired_runtimes.clear()
+            self._runtime_refs.clear()
+        current.close(close_alerts=False)
+        self._release_alert_dispatcher(current)
+        for runtime in retired:
+            runtime.close(close_alerts=False)
+            self._release_alert_dispatcher(runtime)
 
     def store_tls_profile(self, client_address: tuple, profile: TLSProfile) -> None:
         key = tuple(client_address)
@@ -1097,15 +1234,15 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         with self._tls_profile_lock:
             return self._tls_profiles.pop(tuple(client_address), None)
 
-    def _record_tls_failure(self) -> None:
-        detector = self.runtime.ddos_detector
+    def _record_tls_failure(self, runtime: Runtime) -> None:
+        detector = runtime.ddos_detector
         if detector is None:
             return
         detector.record_tls_failure()
         for alert in detector.evaluate().alerts:
-            self.runtime.emit_alert(alert, str(alert.get("event", "ddos")))
+            runtime.emit_alert(alert, str(alert.get("event", "ddos")))
 
-    def _reject_busy(self, request: socket.socket) -> None:
+    def _reject_busy(self, request: socket.socket, runtime: Runtime) -> None:
         if not self.tls_enabled:
             body = b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
             try:
@@ -1132,44 +1269,50 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             request.close()
         except OSError:
             pass
-        self.runtime.metrics.inc("blocked_total")
-        detector = self.runtime.ddos_detector
+        runtime.metrics.inc("blocked_total")
+        detector = runtime.ddos_detector
         if detector is not None:
             detector.record_connection_rejection()
             for alert in detector.evaluate().alerts:
-                self.runtime.emit_alert(alert, str(alert.get("event", "ddos")))
+                runtime.emit_alert(alert, str(alert.get("event", "ddos")))
 
-    def _accept_tls(self, request: socket.socket, client_address: tuple) -> socket.socket | None:
-        assert self.tls_context is not None
+    def _accept_tls(
+        self,
+        request: socket.socket,
+        client_address: tuple,
+        runtime: Runtime,
+    ) -> socket.socket | None:
+        context = self.tls_context
+        assert context is not None
         profile: TLSProfile | None = None
-        if isinstance(self.tls_context, ssl.SSLContext):
-            profile = peek_tls_profile(request, self.runtime.config.server.tls.handshake_timeout)
-        request.settimeout(self.runtime.config.server.tls.handshake_timeout)
+        if isinstance(context, ssl.SSLContext):
+            profile = peek_tls_profile(request, runtime.config.server.tls.handshake_timeout)
+        request.settimeout(runtime.config.server.tls.handshake_timeout)
         try:
-            wrapped = self.tls_context.wrap_socket(request, server_side=True)
+            wrapped = context.wrap_socket(request, server_side=True)
         except Exception:
-            self.runtime.metrics.inc("tls_handshake_failures_total")
-            self._record_tls_failure()
+            runtime.metrics.inc("tls_handshake_failures_total")
+            self._record_tls_failure(runtime)
             return None
         if profile is not None:
             self.store_tls_profile(client_address, profile)
         return wrapped
 
-    def _connection_key(self, client_address: tuple[str, int]) -> str | None:
-        if self.runtime.config.server.max_connections_per_ip <= 0:
+    def _connection_key(self, client_address: tuple[str, int], runtime: Runtime) -> str | None:
+        if runtime.config.server.max_connections_per_ip <= 0:
             return None
         try:
             address = ipaddress.ip_address(client_address[0].split("%", 1)[0])
         except (ValueError, IndexError):
             return None
-        if any(address in network for network in self.runtime.config.policy.trusted_proxies):
+        if any(address in network for network in runtime.config.policy.trusted_proxies):
             return None
         return str(address)
 
-    def _acquire_ip_slot(self, key: str) -> bool:
+    def _acquire_ip_slot(self, key: str, runtime: Runtime) -> bool:
         with self._ip_lock:
             current = self._ip_counts.get(key, 0)
-            if current >= self.runtime.config.server.max_connections_per_ip:
+            if current >= runtime.config.server.max_connections_per_ip:
                 return False
             self._ip_counts[key] = current + 1
             return True
@@ -1199,48 +1342,63 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
                 self._route_counts[key] = current - 1
 
     def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
-        if not self._slots.acquire(blocking=False):
-            self._reject_busy(request)
+        runtime = self.runtime
+        if self._draining.is_set():
+            runtime.metrics.inc("drain_rejections_total")
+            self._reject_busy(request, runtime)
             return
-        ip_key = self._connection_key(client_address)
-        if ip_key is not None and not self._acquire_ip_slot(ip_key):
+        if not self._slots.acquire(blocking=False):
+            self._reject_busy(request, runtime)
+            return
+        ip_key = self._connection_key(client_address, runtime)
+        if ip_key is not None and not self._acquire_ip_slot(ip_key, runtime):
             self._slots.release()
-            self.runtime.metrics.inc("ip_connection_rejections_total")
-            self._reject_busy(request)
+            runtime.metrics.inc("ip_connection_rejections_total")
+            self._reject_busy(request, runtime)
             return
         with self._connection_lock:
             self._active_connections += 1
-        self.runtime.metrics.set("active_connections", float(self._active_connections))
+            self._active_sockets.add(request)
+            self._pending_ip_keys[id(request)] = (request, ip_key)
+        runtime.metrics.set("active_connections", float(self._active_connections))
         try:
             super().process_request(request, client_address)
         except BaseException:
-            with self._connection_lock:
+            with self._drain_condition:
                 self._active_connections = max(0, self._active_connections - 1)
-            self.runtime.metrics.set("active_connections", float(self._active_connections))
+                self._active_sockets.discard(request)
+                self._pending_ip_keys.pop(id(request), None)
+                self._drain_condition.notify_all()
+            runtime.metrics.set("active_connections", float(self._active_connections))
             if ip_key is not None:
                 self._release_ip_slot(ip_key)
             self._slots.release()
             raise
 
     def process_request_thread(self, request: socket.socket, client_address: tuple[str, int]) -> None:
-        ip_key = self._connection_key(client_address)
+        runtime = self.runtime
+        with self._connection_lock:
+            pending = self._pending_ip_keys.pop(id(request), None)
+        ip_key = pending[1] if pending is not None and pending[0] is request else None
         request_slot_acquired = False
         connection = request
         handed_off = False
         if self._request_slots is not None:
             if not self._request_slots.acquire(blocking=False):
-                self.runtime.metrics.inc("inflight_rejections_total")
-                self._reject_busy(request)
+                runtime.metrics.inc("inflight_rejections_total")
+                self._reject_busy(request, runtime)
             else:
                 request_slot_acquired = True
         try:
             if self._request_slots is not None and not request_slot_acquired:
                 return
             if self.tls_context is not None:
-                accepted = self._accept_tls(request, client_address)
+                accepted = self._accept_tls(request, client_address, runtime)
                 if accepted is None:
                     return
                 connection = accepted
+                with self._connection_lock:
+                    self._active_sockets.add(connection)
             handed_off = True
             super().process_request_thread(connection, client_address)
         finally:
@@ -1251,9 +1409,12 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
                     pass
             if request_slot_acquired and self._request_slots is not None:
                 self._request_slots.release()
-            with self._connection_lock:
+            with self._drain_condition:
                 self._active_connections = max(0, self._active_connections - 1)
-            self.runtime.metrics.set("active_connections", float(self._active_connections))
+                self._active_sockets.discard(request)
+                self._active_sockets.discard(connection)
+                self._drain_condition.notify_all()
+            runtime.metrics.set("active_connections", float(self._active_connections))
             if ip_key is not None:
                 self._release_ip_slot(ip_key)
             self._slots.release()

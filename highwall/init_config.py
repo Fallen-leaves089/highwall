@@ -90,6 +90,7 @@ def build_initial_config(
             "max_connections": 64,
             "max_connections_per_ip": 16,
             "max_inflight_requests": 32,
+            "shutdown_timeout": 30.0,
         },
         "upstream": {
             "scheme": upstream_scheme,

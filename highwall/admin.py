@@ -12,7 +12,7 @@ import socket
 import threading
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Any
+from typing import Any, Callable
 
 from . import __version__
 from .audit import AuditRecord
@@ -66,7 +66,10 @@ class AdminHandler(BaseHTTPRequestHandler):
             return False
 
     def _authorized(self) -> bool:
-        token = self.server.runtime.admin_token
+        runtime = getattr(self, "_runtime", None)
+        if runtime is None:
+            runtime, _ = self.server.runtime_snapshot()
+        token = runtime.admin_token
         if not token:
             return False
         values = self.headers.get_all("Authorization") or []
@@ -91,8 +94,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
 
     def _audit(self, status: int, path: str) -> None:
-        self.server.runtime.metrics.inc("admin_requests_total")
-        self.server.runtime.audit.write(
+        runtime = getattr(self, "_runtime", None)
+        if runtime is None:
+            runtime, _ = self.server.runtime_snapshot()
+        runtime.metrics.inc("admin_requests_total")
+        runtime.audit.write(
             AuditRecord(
                 event="admin_access",
                 client_ip=self.client_address[0],
@@ -130,6 +136,9 @@ class AdminHandler(BaseHTTPRequestHandler):
         self._error(int(code), "request_rejected")
 
     def _dispatch(self, head_only: bool = False, method_allowed: bool = True) -> None:
+        runtime, generation = self.server.runtime_snapshot()
+        self._runtime = runtime
+        self._generation = generation
         if not self._peer_is_loopback():
             self._error(403, "forbidden", head_only)
             return
@@ -141,7 +150,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         parsed = urllib.parse.urlsplit(self.path)
         path = parsed.path
-        if not method_allowed:
+        if not method_allowed and not (self.command == "POST" and path == "/reload"):
             self._error(405, "method_not_allowed", head_only)
             return
         if path == "/healthz":
@@ -153,7 +162,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 {
                     "status": "ok",
                     "version": __version__,
-                    "uptime_seconds": round(self.server.runtime.uptime_seconds(), 3),
+                    "uptime_seconds": round(runtime.uptime_seconds(), 3),
+                    "config_generation": self._generation,
                 },
                 head_only,
             )
@@ -176,26 +186,59 @@ class AdminHandler(BaseHTTPRequestHandler):
             finally:
                 self._audit(401, path)
             return
+        if path == "/reload":
+            if self.command != "POST":
+                self._error(405, "method_not_allowed", head_only)
+                return
+            if (
+                parsed.query
+                or self.headers.get("Transfer-Encoding") is not None
+                or self.headers.get("Content-Length") not in (None, "0")
+            ):
+                self._error(400, "bad_request", head_only)
+                return
+            callback = self.server.reload_callback
+            if callback is None:
+                self._error(503, "reload_unavailable", head_only)
+                return
+            try:
+                result = callback()
+                payload = result.as_dict() if hasattr(result, "as_dict") else result
+                if not isinstance(payload, dict) or not isinstance(payload.get("status"), str):
+                    raise TypeError("reload callback returned an invalid payload")
+            except Exception as exc:
+                _LOG.error("admin reload callback failed (%s)", type(exc).__name__)
+                self._json(
+                    500,
+                    {"status": "failed", "error": "reload_failed"},
+                    head_only,
+                )
+                return
+            if payload["status"] == "reloaded":
+                self._runtime, self._generation = self.server.runtime_snapshot()
+            status = 200 if payload.get("status") == "reloaded" else 400
+            self._json(status, payload, head_only)
+            return
         if path == "/metrics":
             if parsed.query:
                 self._error(400, "bad_request", head_only)
                 return
             extra = {
-                "uptime_seconds": self.server.runtime.uptime_seconds(),
-                "rate_limit_clients": float(self.server.runtime.per_ip_limiter.size()) if self.server.runtime.per_ip_limiter else 0.0,
-                "auto_ban_entries": float(self.server.runtime.auto_ban.size()) if self.server.runtime.auto_ban else 0.0,
-                "honeypot_ban_entries": float(self.server.runtime.honeypot_ban.active_bans())
-                if self.server.runtime.honeypot_ban
+                "uptime_seconds": runtime.uptime_seconds(),
+                "rate_limit_clients": float(runtime.per_ip_limiter.size()) if runtime.per_ip_limiter else 0.0,
+                "auto_ban_entries": float(runtime.auto_ban.size()) if runtime.auto_ban else 0.0,
+                "honeypot_ban_entries": float(runtime.honeypot_ban.active_bans())
+                if runtime.honeypot_ban
                 else 0.0,
             }
-            body = self.server.runtime.metrics.prometheus(extra).encode("utf-8")
+            body = runtime.metrics.prometheus(extra).encode("utf-8")
             self._respond(200, "text/plain; version=0.0.4; charset=utf-8", body, head_only)
             return
         if path == "/offenders":
             if parsed.query:
                 self._error(400, "bad_request", head_only)
                 return
-            registry = self.server.runtime.offenders
+            registry = runtime.offenders
             records = registry.active() if registry is not None else []
             self._json(
                 200,
@@ -203,7 +246,7 @@ class AdminHandler(BaseHTTPRequestHandler):
                     "count": len(records),
                     "marks": [
                         record.as_public(
-                            include_client_ip=self.server.runtime.config.alerting.include_client_ip
+                            include_client_ip=runtime.config.alerting.include_client_ip
                         )
                         for record in records
                     ],
@@ -225,10 +268,10 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self._error(400, "bad_request", head_only)
                 return
             limit = int(values[0], 10)
-            if not 1 <= limit <= self.server.runtime.config.admin.audit_tail_max_lines:
+            if not 1 <= limit <= runtime.config.admin.audit_tail_max_lines:
                 self._error(400, "bad_request", head_only)
                 return
-            self._json(200, {"events": self.server.runtime.audit.tail(limit)}, head_only)
+            self._json(200, {"events": runtime.audit.tail(limit)}, head_only)
             return
         self._error(404, "not_found", head_only)
 
@@ -265,15 +308,32 @@ class AdminServer(ThreadingHTTPServer):
     allow_reuse_address = os.name != "nt"
     block_on_close = False
 
-    def __init__(self, address: tuple[str, int], runtime: Runtime) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        runtime: Runtime,
+        reload_callback: Callable[[], Any] | None = None,
+    ) -> None:
         try:
             if ipaddress.ip_address(address[0]).version == 6:
                 self.address_family = socket.AF_INET6
         except ValueError:
             pass
         self.runtime = runtime
+        self.generation = 0
+        self._runtime_lock = threading.Lock()
+        self.reload_callback = reload_callback
         self._slots = threading.BoundedSemaphore(_MAX_ADMIN_CONNECTIONS)
         super().__init__(address, AdminHandler)
+
+    def runtime_snapshot(self) -> tuple[Runtime, int]:
+        with self._runtime_lock:
+            return self.runtime, self.generation
+
+    def set_runtime(self, runtime: Runtime, generation: int | None = None) -> None:
+        with self._runtime_lock:
+            self.runtime = runtime
+            self.generation = self.generation + 1 if generation is None else int(generation)
 
     def process_request(self, request: socket.socket, client_address: tuple[str, int]) -> None:
         if not self._slots.acquire(blocking=False):
@@ -300,10 +360,13 @@ class AdminServer(ThreadingHTTPServer):
         _LOG.error("admin connection handler failed")
 
 
-def build_admin_server(runtime: Runtime) -> AdminServer | None:
+def build_admin_server(
+    runtime: Runtime,
+    reload_callback: Callable[[], Any] | None = None,
+) -> AdminServer | None:
     admin = runtime.config.admin
     if not admin.enabled:
         return None
     if runtime.admin_token is None:
         raise ValueError("admin token is required when admin is enabled")
-    return AdminServer((admin.listen_host, admin.listen_port), runtime)
+    return AdminServer((admin.listen_host, admin.listen_port), runtime, reload_callback)

@@ -8,6 +8,7 @@
     "max_inflight_requests": 32,
     "header_timeout": 5.0,
     "body_timeout": 15.0,
+    "shutdown_timeout": 30.0,
     "tls": {
       "enabled": false,
       "min_version": "TLSv1_2",

@@ -6,9 +6,9 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代理与防护网关**。它只使用 Python 标准库，目标是把应用入口处最容易出现分歧的解析、策略、资源限制和审计做成可审计的小内核。
 
-当前版本：`0.8.1`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook。它仍不是已经完成第三方审计的生产级产品。
+当前版本：`0.9.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标。它仍不是已经完成第三方审计的生产级产品。
 
-> **v0.8 重点**：多信号攻击者关联、确认后持久标记、15 分钟确认慢速窗口、L7 DDoS 告警和异步 Webhook。快速启用步骤见 [威胁防护快速启用](#威胁防护快速启用)，值班处置见 [L7 DDoS 告警与 5 分钟响应窗口](#l7-ddos-告警与-5-分钟响应窗口)。
+> **v0.9 重点**：原子配置重载、失败保留旧配置、TLS 证书轮换和优雅排空停机。操作步骤见 [配置热加载与优雅停机](#配置热加载与优雅停机)。
 
 ## 目录
 
@@ -35,7 +35,7 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 - 适合：给内部服务、静态站、管理面或小型 API 增加一层入口防护。
 - 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
 
-> HighWall 仍是 `0.8.1`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+> HighWall 仍是 `0.9.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
 
 ## 30 秒演示
 
@@ -332,7 +332,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1
 - 在 `.runtime\config.json` 生成回环监听、管理面关闭、WAF/DLP 阻断、在途背压、上游熔断和 `common` 蜜罐预设的配置；
 - 校验配置并启动 HighWall；
 - `-WithDemoUpstream` 时同时启动本地演示上游，并验证 Host 拒绝、正常转发、蜜罐命中与审计落盘；
-- 写入 PID、日志、配置 SHA-256 和审计文件；重复执行不会重复启动，配置在启动后被改动时 `-Status` 返回异常并提示重启。
+- 写入 PID、日志、配置 SHA-256 和审计文件；重复执行不会重复启动。配置在启动后被改动时 `-Status` 返回异常并提示重启；这是实验脚本的保守行为，生产实例可用本文的 `/reload`。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1 -Status
@@ -381,10 +381,10 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 ## 容器镜像
 
-版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.8.1 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.8.1)。
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.9.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.9.0)。
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.8.1
+docker pull ghcr.io/fallen-leaves089/highwall:0.9.0
 ```
 
 镜像以 UID `10001` 非 root 运行，默认执行 `python -m highwall serve -c /etc/highwall/config.json`。镜像不内置配置，缺少配置时会直接拒绝启动，不会退化为放行。
@@ -411,7 +411,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.8.1
+  ghcr.io/fallen-leaves089/highwall:0.9.0
 ```
 
 - 生产环境启用 TLS 时，把证书和私钥只读挂载到容器内，并在配置中使用容器内路径。
@@ -434,6 +434,7 @@ docker run --rm --name highwall \
 - `policy.response_integrity_mode` / `integrity_pins`：对规范化后的 `GET` 路由路径（大小写不敏感）校验 `status` 和响应体 SHA-256；支持 `off`、`detect`、`block`。钉扎值必须随受控发布流程更新。
 - `upstream.circuit_breaker`：`failure_threshold`、`window`、`open_seconds` 和 `half_open_max_requests` 控制上游故障隔离；只把超时、连接/协议失败和 5xx 计为失败，4xx 视为上游可达。
 - `server.max_inflight_requests`：全局在途请求上限，`0` 表示关闭；应小于 `max_connections` 才能形成独立背压。
+- `server.shutdown_timeout`：收到 `SIGINT`/`SIGTERM`/`SIGBREAK` 后等待在途请求完成的秒数，默认 30；`0` 表示不等待并立即关闭剩余连接。
 - `policy.allowed_body_content_types`：没有 Content-Type 或媒体类型不在列表中的请求体一律拒绝。
 - `policy.response_scan_mode` / `response_scan_max_bytes` / `response_scan_headers`：上游响应的秘密/调试信息扫描，分别支持 `off`、`detect`、`block`；只扫描有界前缀，默认 1 MiB。媒体类型不再作为免扫条件，并尝试 UTF-8/Latin-1/UTF-16 解码；响应头默认参与扫描，`Set-Cookie` 固定排除。
 - `server.max_connections_per_ip`：单个来源 IP 的并发连接上限；`0` 关闭限制，可信代理来源不计入。它不能替代总连接上限。
@@ -443,11 +444,26 @@ docker run --rm --name highwall \
 - `ddos_detection`：L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误的多信号聚合；`escalation_seconds=300` 表示持续 5 分钟才升级告警，`recovery_seconds` 控制恢复事件。它不会自动清洗带宽型 DDoS。
 - `alerting`：异步 Webhook 告警。`enabled=true` 时 `HIGHWALL_ALERT_WEBHOOK` 必须存在且默认为 HTTPS；可选 `HIGHWALL_ALERT_TOKEN`。`include_client_ip` 默认 `false`，`allow_http` 默认 `false`。队列满会丢弃并增加 `alert_dropped_total`，不会阻塞请求。
 - `upstream.total_timeout`：整个上游交换（连接、响应头、响应体）的绝对上限；`read_timeout` 是单次读取上限。
-- `server.tls`：只做服务端 TLS，不替代上游 TLS 校验；证书和私钥路径按配置文件所在目录解析。握手在工作线程内执行并受 `handshake_timeout` 约束，慢握手不会阻塞新的 accept；TLS 启用且未配置 HSTS 时会自动添加一年期 HSTS。
+- `server.tls`：只做服务端 TLS，不替代上游 TLS 校验；证书和私钥路径按配置文件所在目录解析。握手在工作线程内执行并受 `handshake_timeout` 约束，慢握手不会阻塞新的 accept；TLS 启用且未配置 HSTS 时会自动添加一年期 HSTS。替换证书文件或路径后可通过 `POST /reload` 让新握手使用新证书。
 - `audit.path`：相对路径按配置文件目录解析；日志目录必须由服务账户和运维账户保护。`audit.path_mode` 支持 `redact`（默认）、`hash` 和 `exact`；默认模式会清洗/解码路径并脱敏敏感键、后续值和明显高熵段。
-- `admin.enabled`：默认关闭；打开后强制回环监听和 token。
+- `admin.enabled`：默认关闭；打开后强制回环监听和 token。管理面提供 `/healthz`、`/metrics`、`/offenders`、`/audit/tail` 和受保护的 `POST /reload`。
 
 完整示例见 [`config.example.json`](config.example.json)。蜜罐配置见 [`docs/HONEYPOT.md`](docs/HONEYPOT.md)，威胁边界见 [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md)，部署基线见 [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md)，漏洞报告方式见 [`SECURITY.md`](SECURITY.md)。
+
+## 配置热加载与优雅停机
+
+HighWall 支持原子配置重载和排空停机。重载会先完整加载、校验新配置，并构建新的运行时和 TLS 上下文；任一步失败都会保留旧配置和旧连接，进程继续服务。
+
+- POSIX 使用 `SIGHUP`；Windows 使用管理面 `POST /reload`（管理面需启用并携带 Bearer token）。
+- 可热更新策略、路由、上游、限流、审计、告警、威胁/DDOS 检测、管理 token、TLS 证书内容和路径、超时等。
+- 不能热改监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态和管理面监听；这些变更返回 `rejected` 并提示重启。
+- 未变化的限速桶、自动封禁、蜜罐封禁、攻击者标记、熔断器和指标会复用；配置变化的部分重建。旧运行时在在途请求结束后释放。
+- `server.shutdown_timeout` 控制停机排空等待，默认 30 秒；超时会关闭剩余连接。排空期间新连接返回 503（TLS 连接直接关闭）。
+- 证书轮换：替换证书/私钥文件或修改路径后触发重载，新握手使用新证书；已建立连接保持旧上下文直到结束。
+
+```powershell
+curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/reload
+```
 
 ## 常见问题与排查
 

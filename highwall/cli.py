@@ -14,6 +14,7 @@ from . import __version__
 from .admin import build_admin_server
 from .config_report import build_config_report
 from .config import Config, ConfigError, load_config, load_config_data
+from .control import ServerController
 from .init_config import (
     build_initial_config,
     ensure_stable_relative_paths,
@@ -48,26 +49,32 @@ def _check_config(config: Config) -> str:
     return "configuration OK"
 
 
-def _serve(config: Config) -> int:
+def _serve(config: Config, config_path: Path) -> int:
     runtime = Runtime.build(config)
     tls_context = build_tls_context(config)
     gateway: GatewayServer | None = None
     admin = None
     try:
         gateway = GatewayServer((config.server.listen_host, config.server.listen_port), runtime, tls_context)
-        admin = build_admin_server(runtime)
+        controller = ServerController(config_path, gateway)
+        admin = build_admin_server(runtime, reload_callback=controller.reload)
+        if admin is not None:
+            controller.attach_admin(admin)
     except OSError as exc:
         if gateway is not None:
             gateway.server_close()
+        runtime.close()
         _LOG.error("listener bind failed (%s)", type(exc).__name__)
         return 1
     except Exception as exc:
         if gateway is not None:
             gateway.server_close()
+        runtime.close()
         _LOG.error("startup failed (%s)", type(exc).__name__)
         return 1
 
     stop = threading.Event()
+    reload_event = threading.Event()
     gateway_thread = threading.Thread(target=gateway.serve_forever, name="highwall-proxy", kwargs={"poll_interval": 0.2})
     admin_thread = None
     if admin is not None:
@@ -77,14 +84,22 @@ def _serve(config: Config) -> int:
         _LOG.info("shutdown requested")
         stop.set()
 
+    def request_reload(signum: int, frame: object) -> None:
+        reload_event.set()
+
     previous_handlers: dict[int, object] = {}
-    for signal_name in ("SIGINT", "SIGTERM"):
+    for signal_name, handler in (
+        ("SIGINT", request_stop),
+        ("SIGTERM", request_stop),
+        ("SIGBREAK", request_stop),
+        ("SIGHUP", request_reload),
+    ):
         signal_value = getattr(signal, signal_name, None)
         if signal_value is None:
             continue
         try:
             previous_handlers[signal_value] = signal.getsignal(signal_value)
-            signal.signal(signal_value, request_stop)
+            signal.signal(signal_value, handler)
         except (ValueError, OSError):
             pass
 
@@ -108,27 +123,38 @@ def _serve(config: Config) -> int:
 
     try:
         while not stop.wait(0.5):
+            if reload_event.is_set():
+                reload_event.clear()
+                result = controller.reload()
+                if result.status != "reloaded":
+                    _LOG.error("configuration reload rejected: %s", result.error)
             if not gateway_thread.is_alive() or (admin_thread is not None and not admin_thread.is_alive()):
                 _LOG.error("a server thread stopped unexpectedly")
                 break
     except KeyboardInterrupt:
         stop.set()
     finally:
-        try:
-            gateway.shutdown()
-        except Exception:
-            pass
-        gateway.server_close()
+        gateway.begin_drain()
         if admin is not None:
             try:
                 admin.shutdown()
             except Exception:
                 pass
             admin.server_close()
+        try:
+            gateway.shutdown()
+        except Exception:
+            pass
+        gateway.server_close()
+        drain_timeout = gateway.runtime.config.server.shutdown_timeout
+        if not gateway.wait_for_drain(drain_timeout):
+            _LOG.warning("shutdown drain timed out; closing active connections")
+            gateway.abort_connections()
+            gateway.wait_for_drain(1.0)
         gateway_thread.join(timeout=5.0)
         if admin_thread is not None:
             admin_thread.join(timeout=5.0)
-        runtime.close()
+        gateway.close_all_runtimes()
         for signal_value, handler in previous_handlers.items():
             try:
                 signal.signal(signal_value, handler)
@@ -302,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "serve":
         try:
-            return _serve(config)
+            return _serve(config, Path(args.config))
         except ConfigError as exc:
             print(f"configuration error: {exc}", file=sys.stderr)
             return 2

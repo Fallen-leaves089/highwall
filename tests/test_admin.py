@@ -97,8 +97,17 @@ class AdminIntegrationTests(unittest.TestCase):
         status, headers, body = self.request("GET", "/healthz")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["status"], "ok")
+        self.assertEqual(json.loads(body)["config_generation"], 0)
         self.assertIn("default-src 'none'", dict(headers)["Content-Security-Policy"])
         self.assertEqual(dict(headers)["Cache-Control"], "no-store")
+
+    def test_health_reports_applied_generation(self) -> None:
+        self.server.set_runtime(self.runtime, generation=4)
+
+        status, _, body = self.request("GET", "/healthz")
+
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["config_generation"], 4)
 
     def test_metrics_requires_token(self) -> None:
         status, headers, _ = self.request("GET", "/metrics")
@@ -164,6 +173,43 @@ class AdminIntegrationTests(unittest.TestCase):
     def test_post_is_rejected(self) -> None:
         status, _, _ = self.request("POST", "/metrics", token=self.token)
         self.assertEqual(status, 405)
+
+    def test_post_reload_requires_token_and_calls_callback(self) -> None:
+        status, _, _ = self.request("POST", "/reload")
+        self.assertEqual(status, 401)
+
+        self.server.reload_callback = lambda: {
+            "status": "reloaded",
+            "generation": 3,
+        }
+        status, _, body = self.request("POST", "/reload", token=self.token)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"status": "reloaded", "generation": 3})
+
+        status, _, _ = self.request("GET", "/reload", token=self.token)
+        self.assertEqual(status, 405)
+
+        status, _, _ = self.request("POST", "/reload?x=1", token=self.token)
+        self.assertEqual(status, 400)
+
+    def test_reload_unavailable_without_callback(self) -> None:
+        status, _, body = self.request("POST", "/reload", token=self.token)
+        self.assertEqual(status, 503)
+        self.assertEqual(json.loads(body)["error"], "reload_unavailable")
+
+    def test_reload_callback_failure_returns_json_500(self) -> None:
+        def fail() -> dict:
+            raise RuntimeError("boom")
+
+        self.server.reload_callback = fail
+        status, _, body = self.request("POST", "/reload", token=self.token)
+
+        self.assertEqual(status, 500)
+        self.assertEqual(
+            json.loads(body),
+            {"status": "failed", "error": "reload_failed"},
+        )
+        self.assertEqual(self.request("GET", "/healthz")[0], 200)
 
     def test_post_with_non_loopback_host_is_rejected_before_method_handling(self) -> None:
         status, _, _ = self.request("POST", "/metrics", token=self.token, host="evil.local")

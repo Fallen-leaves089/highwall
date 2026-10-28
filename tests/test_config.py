@@ -25,6 +25,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.server.listen_host, "127.0.0.1")
         self.assertEqual(config.server.listen_port, 18090)
         self.assertEqual(config.server.max_connections_per_ip, 16)
+        self.assertEqual(config.server.shutdown_timeout, 30.0)
         self.assertEqual(config.policy.allowed_hosts, ("example.test",))
         self.assertFalse(config.admin.enabled)
         self.assertTrue(config.policy.reject_encoded_separators)
