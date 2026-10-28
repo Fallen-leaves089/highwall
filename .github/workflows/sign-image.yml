@@ -1,0 +1,59 @@
+name: Sign image
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: 'Image reference with digest, e.g. ghcr.io/fallen-leaves089/highwall@sha256:...'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+  packages: write
+
+jobs:
+  sign:
+    name: Sign existing image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Validate image reference
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          case "$IMAGE" in
+            ghcr.io/fallen-leaves089/highwall@sha256:*) ;;
+            *) echo "unexpected image reference: $IMAGE"; exit 2 ;;
+          esac
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: v2.6.5
+
+      - name: Sign published image
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: cosign sign --yes "$IMAGE"
+
+      - name: Verify signature
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if cosign verify "$IMAGE" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/sign-image.yml@refs/heads/main$" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com; then
+              exit 0
+            fi
+            echo "verification attempt ${attempt} failed; retrying"
+            sleep 6
+          done
+          exit 1
