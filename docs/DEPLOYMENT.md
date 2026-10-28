@@ -39,8 +39,21 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1
 - 要修改已有实例，先 `-Stop`，再显式使用 `-Reconfigure`；脚本只合并命令行显式传入的参数，未指定的路由、TLS、超时、限流、扫描模式和安全头保持原值，旧配置自动备份为 `config.json.bak.<时间戳>`。
 - 手工局部修改使用 `python -m highwall init --base config.json --output config.json --force --listen-port 18091`；`--base` 模式只修改显式字段，并在写盘前验证合并结果。若配置包含相对审计或 TLS 路径，输出到另一个目录会被拒绝，避免相对路径悄悄指向新位置。
 - `highwall inspect` 输出的是解析、默认值和蜜罐预设展开后的生效值，不是原始文件回显，包含 TLS、超时、路由、WAF、响应扫描、安全头、限流和管理面参数。用它核对“写了但没生效”的情况。
-- `--force` 是原子替换配置文件；Windows ACL 可能随新文件继承父目录权限。生产环境替换后应重新核对服务账户 ACL，并重启受控实例。
-- HighWall 不热加载配置。`quickstart.ps1 -Status` 会比较启动时记录的 SHA-256 与当前文件；发现变化时返回非零并提示重启，重复启动也会拒绝沿用旧进程。
+- `--force` 是原子替换配置文件；Windows ACL 可能随新文件继承父目录权限。生产环境替换后应重新核对服务账户 ACL；可热改字段通过 `/reload` 生效，监听地址/端口、`max_connections`、`max_inflight_requests` 或 TLS 启用状态变更仍需重启。
+- HighWall 支持原子配置重载：POSIX 发送 `SIGHUP`，或调用管理面 `POST /reload`。重载失败会保留旧配置；监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态和管理面监听仍需重启。`quickstart.ps1 -Status` 仍会比较启动时记录的 SHA-256 与当前文件，并在发现变化时提示重启，这是实验脚本的保守行为，不代表进程不能热加载。
+
+### 配置重载与证书轮换
+
+```powershell
+python -m highwall check -c C:\ProgramData\HighWall\config.json
+curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/reload
+```
+
+- 先在同一个服务环境里确认新配置能通过 `check`，再调用 `/reload`；返回 `{"status":"reloaded","generation":N}` 表示已切换。
+- 失败返回 `{"status":"rejected","error":"..."}`，旧配置继续服务；检查日志和 `config_reload_failures_total`。
+- 证书轮换可替换文件内容或路径后重载；新握手使用新证书，旧连接保持旧上下文直到结束。轮换后用新连接验证证书链和主机名。
+- 需要修改监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态或管理面监听时，使用滚动重启。
+- `server.shutdown_timeout` 控制 `SIGINT`/`SIGTERM`/`SIGBREAK` 后的排空等待；排空期间新连接返回 503（TLS 连接直接关闭），超时后剩余连接被关闭。
 
 ## 1. 目录与账户
 
@@ -310,7 +323,8 @@ HighWall 不替代防火墙、netns、用户隔离或上游认证。
 - 监控 `threat_detected_total`、`threat_tarpitted_total`、`threat_tarpit_shed_total`、`tarpit_active`、`offender_marks`、`ddos_detected_total`、`ddos_escalated_total`、`ddos_recovered_total`、`alert_sent_total`、`alert_failed_total`、`alert_dropped_total` 和 `alert_queue_depth`；
 - 把审计日志持续外送或写入不可变存储；本机可写日志不能抵抗同权限攻击者修改或删除；
 - 自动封禁只存在内存中；重启会清空。需要长期封禁时，应使用主机防火墙或上游访问控制，而不是把应用内状态当持久策略；
-- 管理 token 轮换后重启；旧 token 不会自动失效，直到进程重启或环境更新。
+- 管理 token 轮换：更新服务环境中的 token 后执行 `/reload`；新运行时切换后旧 token 对新请求失效，正在处理的单次管理请求可能完成。
+- 监控 `config_reloads_total`、`config_reload_failures_total` 和 `config_generation`；失败重载不会改变生效配置。
 
 ### 外部告警 Webhook
 
@@ -389,6 +403,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 - [ ] 精确 GET 路径的完整性钉扎在 `detect` 记录、在 `block` 返回 502 且不泄露被替换的响应体。
 - [ ] 上游连续 5xx/超时后熔断打开并返回 503；恢复探针成功后状态回到 closed。
 - [ ] `server.max_inflight_requests` 超限返回 503，而不是无限排队。
+- [ ] `POST /reload` 在配置有语法错误或监听字段变化时返回 `rejected`，旧配置继续服务；成功时 `generation` 增加。
+- [ ] 证书轮换后新连接使用新证书，旧连接不被强制中断；排空期间新连接返回 503，在途请求在 `shutdown_timeout` 内完成。
 - [ ] 上游返回私钥或调试栈时，DLP 的 `block` 模式返回 502 且不把原文转发给客户端；`detect` 模式只记录。
 - [ ] UTF-16 BOM、NUL body 和非 UTF-8/ASCII 声明 charset 被拒绝；DLP 能覆盖响应头、二进制响应体和 UTF-16 响应，并正确跳过 `Set-Cookie`。
 - [ ] 单 IP 超过并发上限时返回 503；累计违规达到阈值后临时返回 429，窗口/时长符合配置。

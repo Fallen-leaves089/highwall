@@ -96,6 +96,7 @@ class ServerConfig:
     max_inflight_requests: int
     header_timeout: float
     body_timeout: float
+    shutdown_timeout: float
     tls: TLSConfig
 
 
@@ -557,6 +558,7 @@ def _parse_server(value: Any, base_dir: Path) -> ServerConfig:
             "max_inflight_requests",
             "header_timeout",
             "body_timeout",
+            "shutdown_timeout",
             "tls",
         },
     )
@@ -590,6 +592,7 @@ def _parse_server(value: Any, base_dir: Path) -> ServerConfig:
         max_inflight_requests=max_inflight_requests,
         header_timeout=_number(raw.get("header_timeout"), "server.header_timeout", 5.0, 0.1, 120.0),
         body_timeout=_number(raw.get("body_timeout"), "server.body_timeout", 15.0, 0.1, 300.0),
+        shutdown_timeout=_number(raw.get("shutdown_timeout"), "server.shutdown_timeout", 30.0, 0.0, 300.0),
         tls=_parse_tls(raw.get("tls", {}), base_dir, "server.tls"),
     )
 

@@ -58,6 +58,10 @@ class Metrics:
             "alert_failed_total": 0,
             "alert_dropped_total": 0,
             "alert_queue_depth": 0,
+            "config_reloads_total": 0,
+            "config_reload_failures_total": 0,
+            "drain_rejections_total": 0,
+            "config_generation": 0,
         }
 
     def inc(self, name: str, amount: float = 1.0) -> None:
@@ -129,6 +133,10 @@ class Metrics:
             "alert_failed_total": "Alerts that could not be delivered.",
             "alert_dropped_total": "Alerts dropped because the queue was full.",
             "alert_queue_depth": "Alerts waiting for delivery.",
+            "config_reloads_total": "Configuration reloads applied successfully.",
+            "config_reload_failures_total": "Configuration reload attempts rejected.",
+            "drain_rejections_total": "Connections rejected while the gateway was draining.",
+            "config_generation": "Monotonic configuration generation applied to the listener.",
         }
         for name in sorted(values):
             metric = f"highwall_{name}"

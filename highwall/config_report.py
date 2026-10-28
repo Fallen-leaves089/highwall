@@ -69,6 +69,7 @@ def build_config_report(config: Config) -> dict[str, Any]:
             "max_inflight_requests": config.server.max_inflight_requests,
             "header_timeout": config.server.header_timeout,
             "body_timeout": config.server.body_timeout,
+            "shutdown_timeout": config.server.shutdown_timeout,
             "tls_enabled": config.server.tls.enabled,
             "tls": {
                 "enabled": config.server.tls.enabled,

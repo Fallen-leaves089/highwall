@@ -6,9 +6,9 @@ English | [简体中文](README.md)
 
 HighWall is a **fail-closed HTTP/1.1 application-layer reverse proxy and security gateway**. It uses only the Python standard library and aims to turn the parsing, policy, resource-limit, and audit decisions most prone to ambiguity at an application entry point into a small, auditable core.
 
-Current version: `0.8.1`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 adds multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks. It is still not a production-grade product that has completed an independent third-party audit.
+Current version: `0.9.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 adds atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics. It is still not a production-grade product that has completed an independent third-party audit.
 
-> **v0.8 focus**: multi-signal attacker correlation, persistent marks after confirmation, a 15-minute confirmed slow window, L7 DDoS alerts, and asynchronous webhooks. See [Enabling threat protection](#enabling-threat-protection) for the rollout sequence and [L7 DDoS alerts and the 5-minute response window](#l7-ddos-alerts-and-the-5-minute-response-window) for the on-call process.
+> **v0.9 focus**: atomic configuration reload, fail-safe rollback to the active configuration, TLS certificate rotation, and graceful drain. See [Configuration reload and graceful drain](#configuration-reload-and-graceful-drain).
 
 ## Contents
 
@@ -35,7 +35,7 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 - Good fit: internal services, static sites, admin surfaces, and small APIs that need an extra ingress layer.
 - Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
 
-> HighWall is still at `0.8.1` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+> HighWall is still at `0.9.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
 ## 30-second demo
 
@@ -332,7 +332,7 @@ The script will:
 - generate `.runtime\config.json` with a loopback listener, admin plane disabled, WAF/DLP blocking, in-flight backpressure, an upstream circuit breaker, and the `common` honeypot preset;
 - validate the configuration and start HighWall;
 - with `-WithDemoUpstream`, also start a local demo upstream and verify Host rejection, normal forwarding, honeypot hits, and audit output;
-- write the PID, logs, configuration SHA-256, and audit file. Repeated runs do not start duplicate instances. If the configuration changes after startup, `-Status` reports an error and asks for a restart.
+- write the PID, logs, configuration SHA-256, and audit file. Repeated runs do not start duplicate instances. If the configuration changes after startup, `-Status` reports an error and asks for a restart; this is conservative behavior in the experimental script, while production instances can use `/reload` as described below.
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1 -Status
@@ -381,10 +381,10 @@ The admin token is read only from the environment. Do not put it in `config.json
 
 ## Container image
 
-Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.8.1 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.8.1).
+Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.9.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.9.0).
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.8.1
+docker pull ghcr.io/fallen-leaves089/highwall:0.9.0
 ```
 
 The image runs as non-root UID `10001` and starts `python -m highwall serve -c /etc/highwall/config.json` by default. No configuration is baked into the image. Without a mounted configuration, startup fails closed instead of falling back to an open policy.
@@ -411,7 +411,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.8.1
+  ghcr.io/fallen-leaves089/highwall:0.9.0
 ```
 
 - For TLS in production, mount the certificate and private key read-only and reference their in-container paths from the configuration.
@@ -434,6 +434,7 @@ docker run --rm --name highwall \
 - `policy.response_integrity_mode` / `integrity_pins`: validate the status and response-body SHA-256 for normalized `GET` routes, case-insensitively. Supports `off`, `detect`, and `block`. Pin values must be updated through a controlled release process.
 - `upstream.circuit_breaker`: `failure_threshold`, `window`, `open_seconds`, and `half_open_max_requests` control upstream failure isolation. Only timeouts, connection/protocol failures, and 5xx responses count as failures; 4xx means the upstream was reachable.
 - `server.max_inflight_requests`: global in-flight request limit; `0` disables it. It should be lower than `max_connections` to create independent backpressure.
+- `server.shutdown_timeout`: seconds to wait for in-flight requests after `SIGINT`/`SIGTERM`/`SIGBREAK`; defaults to 30. `0` closes remaining connections immediately.
 - `policy.allowed_body_content_types`: a request body with no Content-Type, or with a media type outside the list, is rejected.
 - `policy.response_scan_mode` / `response_scan_max_bytes` / `response_scan_headers`: secret and debug-information scanning for upstream responses. Supports `off`, `detect`, and `block`; only a bounded prefix, 1 MiB by default, is scanned. Media types are not treated as an exemption, and decoding attempts cover UTF-8, Latin-1, and UTF-16. Response headers are scanned by default, with `Set-Cookie` always excluded.
 - `server.max_connections_per_ip`: concurrent connection limit for a single source IP; `0` disables it, and trusted-proxy sources are not counted. It does not replace the total connection limit.
@@ -443,11 +444,26 @@ docker run --rm --name highwall \
 - `ddos_detection`: aggregates L7 request rate, rejection ratio, connection saturation, TLS failures, and upstream errors. `escalation_seconds=300` means a 5-minute sustained signal window before escalation; `recovery_seconds` controls recovery events. It does not scrub bandwidth-based DDoS.
 - `alerting`: asynchronous webhook delivery. When `enabled=true`, `HIGHWALL_ALERT_WEBHOOK` is required and defaults to HTTPS only; `HIGHWALL_ALERT_TOKEN` is optional. `include_client_ip` and `allow_http` both default to `false`. A full queue drops alerts and increments `alert_dropped_total` without blocking requests.
 - `upstream.total_timeout`: absolute limit for the complete upstream exchange (connect, response headers, and response body); `read_timeout` is the per-read limit.
-- `server.tls`: server-side TLS only; it does not replace upstream TLS verification. Certificate and key paths are resolved relative to the configuration file. The handshake runs in a worker thread under `handshake_timeout`, so a slow handshake does not block new accepts. When TLS is enabled without explicit HSTS, a one-year HSTS header is added automatically.
+- `server.tls`: server-side TLS only; it does not replace upstream TLS verification. Certificate and key paths are resolved relative to the configuration file. The handshake runs in a worker thread under `handshake_timeout`, so a slow handshake does not block new accepts. When TLS is enabled without explicit HSTS, a one-year HSTS header is added automatically. After replacing certificate files or paths, use `POST /reload` so new handshakes pick up the new certificate.
 - `audit.path`: relative paths resolve from the configuration directory. The log directory must be protected from both the service account and the operations account. `audit.path_mode` supports `redact` (default), `hash`, and `exact`; the default mode cleans and decodes paths and redacts sensitive keys, following values, and obvious high-entropy segments.
-- `admin.enabled`: disabled by default; when enabled, loopback binding and a token are mandatory.
+- `admin.enabled`: disabled by default; when enabled, loopback binding and a token are mandatory. The admin plane exposes `/healthz`, `/metrics`, `/offenders`, `/audit/tail`, and a protected `POST /reload`.
 
 See [`config.example.json`](config.example.json) for the complete example. Honeypot configuration is documented in [`docs/HONEYPOT.md`](docs/HONEYPOT.md), threat boundaries in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md), the deployment baseline in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), and vulnerability reporting in [`SECURITY.md`](SECURITY.md). These detailed documents are currently written in Chinese.
+
+## Configuration reload and graceful drain
+
+HighWall supports atomic configuration reload and drained shutdown. A reload fully loads and validates the new configuration and builds a new runtime and TLS context. If any step fails, the old configuration and connections remain active and the process keeps serving.
+
+- Use `SIGHUP` on POSIX, or the protected admin `POST /reload` endpoint on Windows (the admin plane must be enabled and the request must carry the Bearer token).
+- Reloadable settings include policy, routes, upstream, rate limits, audit, alerting, threat/DDoS detection, the admin token, TLS certificate contents and paths, and timeouts.
+- Listener address/port, `max_connections`, `max_inflight_requests`, TLS enablement, and admin listener settings cannot be changed by reload. Such changes return `rejected` and require a restart.
+- Unchanged rate-limit buckets, adaptive bans, honeypot bans, attacker marks, circuit breakers, and metrics are reused; changed components are rebuilt. The old runtime is released after its in-flight requests finish.
+- `server.shutdown_timeout` controls the drain wait, 30 seconds by default; remaining connections are closed after the timeout. New connections receive 503 while draining (TLS connections are closed directly).
+- Certificate rotation: replace the certificate/key files or change their paths and trigger a reload. New handshakes use the new certificate; established connections keep their old context until they finish.
+
+```powershell
+curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/reload
+```
 
 ## Troubleshooting
 

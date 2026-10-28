@@ -70,53 +70,89 @@ class Runtime:
             else cooldown_seconds,
         )
 
-    def close(self) -> None:
-        if self.alert_dispatcher is not None:
-            self.alert_dispatcher.close()
+    def close(self, *, close_alerts: bool = True) -> None:
+        dispatcher = self.alert_dispatcher
+        if close_alerts:
+            self.alert_dispatcher = None
+            if dispatcher is not None:
+                dispatcher.close()
 
     @classmethod
-    def build(cls, config: Config, admin_token: str | None = None) -> "Runtime":
+    def build(
+        cls,
+        config: Config,
+        admin_token: str | None = None,
+        *,
+        previous: "Runtime | None" = None,
+    ) -> "Runtime":
         resolved_token = validate_admin_token(admin_token) if admin_token is not None else load_admin_token(config)
-        try:
-            audit = AuditLogger(config.audit)
-        except OSError as exc:
-            raise ConfigError("audit log path is not usable") from exc
-        metrics = Metrics()
+        if previous is not None and previous.config.audit == config.audit:
+            audit = previous.audit
+        else:
+            try:
+                audit = AuditLogger(config.audit)
+            except OSError as exc:
+                raise ConfigError("audit log path is not usable") from exc
+        metrics = previous.metrics if previous is not None else Metrics()
         per_ip: TokenBucketLimiter | None = None
         global_limiter: TokenBucketLimiter | None = None
         auto_ban: AdaptiveBanner | None = None
         circuit_breaker: CircuitBreaker | None = None
         honeypot_ban: AdaptiveBanner | None = None
         route_limiters: dict[str, TokenBucketLimiter] = {}
-        if config.rate_limit.enabled:
-            per_ip = TokenBucketLimiter(
-                config.rate_limit.per_ip_rate,
-                config.rate_limit.per_ip_burst,
-                max_entries=config.rate_limit.max_tracked_clients,
-                idle_ttl=config.rate_limit.client_idle_ttl,
-            )
-            global_limiter = TokenBucketLimiter(
-                config.rate_limit.global_rate,
-                config.rate_limit.global_burst,
-                max_entries=1,
-                idle_ttl=config.rate_limit.client_idle_ttl,
-            )
-            if config.rate_limit.auto_ban_threshold > 0:
-                auto_ban = AdaptiveBanner(
-                    config.rate_limit.auto_ban_threshold,
-                    config.rate_limit.auto_ban_window,
-                    config.rate_limit.auto_ban_seconds,
-                    max_entries=config.rate_limit.max_ban_entries,
-                )
-        for route in config.policy.routes:
-            if route.rate > 0:
-                route_limiters[route.path_prefix] = TokenBucketLimiter(
-                    route.rate,
-                    route.rate_burst,
+        reuse_rate_state = (
+            previous is not None
+            and config.rate_limit == previous.config.rate_limit
+            and config.policy.routes == previous.config.policy.routes
+        )
+        if reuse_rate_state:
+            assert previous is not None
+            per_ip = previous.per_ip_limiter
+            global_limiter = previous.global_limiter
+            auto_ban = previous.auto_ban
+            route_limiters = previous.route_limiters
+        else:
+            if config.rate_limit.enabled:
+                per_ip = TokenBucketLimiter(
+                    config.rate_limit.per_ip_rate,
+                    config.rate_limit.per_ip_burst,
                     max_entries=config.rate_limit.max_tracked_clients,
                     idle_ttl=config.rate_limit.client_idle_ttl,
                 )
-        if config.upstream.circuit_breaker.enabled:
+                global_limiter = TokenBucketLimiter(
+                    config.rate_limit.global_rate,
+                    config.rate_limit.global_burst,
+                    max_entries=1,
+                    idle_ttl=config.rate_limit.client_idle_ttl,
+                )
+                if config.rate_limit.auto_ban_threshold > 0:
+                    auto_ban = AdaptiveBanner(
+                        config.rate_limit.auto_ban_threshold,
+                        config.rate_limit.auto_ban_window,
+                        config.rate_limit.auto_ban_seconds,
+                        max_entries=config.rate_limit.max_ban_entries,
+                    )
+            for route in config.policy.routes:
+                if route.rate > 0:
+                    route_limiters[route.path_prefix] = TokenBucketLimiter(
+                        route.rate,
+                        route.rate_burst,
+                        max_entries=config.rate_limit.max_tracked_clients,
+                        idle_ttl=config.rate_limit.client_idle_ttl,
+                    )
+        same_upstream_target = (
+            previous is not None
+            and config.upstream.scheme == previous.config.upstream.scheme
+            and config.upstream.host == previous.config.upstream.host
+            and config.upstream.port == previous.config.upstream.port
+        )
+        if (
+            same_upstream_target
+            and previous is not None
+            and config.upstream.circuit_breaker == previous.config.upstream.circuit_breaker
+        ):
+            circuit_breaker = previous.circuit_breaker
+        elif config.upstream.circuit_breaker.enabled:
             breaker_config = config.upstream.circuit_breaker
             circuit_breaker = CircuitBreaker(
                 breaker_config.failure_threshold,
@@ -124,13 +160,49 @@ class Runtime:
                 breaker_config.open_seconds,
                 half_open_max_requests=breaker_config.half_open_max_requests,
             )
-        if config.policy.honeypot.enabled and config.policy.honeypot.ban_seconds > 0:
+        if (
+            previous is not None
+            and config.policy.honeypot == previous.config.policy.honeypot
+            and config.rate_limit.max_ban_entries == previous.config.rate_limit.max_ban_entries
+        ):
+            honeypot_ban = previous.honeypot_ban
+        elif config.policy.honeypot.enabled and config.policy.honeypot.ban_seconds > 0:
             honeypot_ban = AdaptiveBanner(
                 1,
                 1.0,
                 config.policy.honeypot.ban_seconds,
                 max_entries=config.rate_limit.max_ban_entries,
             )
+        reuse_threat_state = (
+            previous is not None
+            and config.threat_detection == previous.config.threat_detection
+            and config.alerting.include_client_ip == previous.config.alerting.include_client_ip
+        )
+        offenders: OffenderRegistry | None = None
+        threat_detector: ThreatDetector | None = None
+        if reuse_threat_state:
+            assert previous is not None
+            offenders = previous.offenders
+            threat_detector = previous.threat_detector
+        elif config.threat_detection.enabled:
+            offenders = OffenderRegistry(
+                config.threat_detection.offender_path,
+                max_entries=config.threat_detection.max_tracked_actors,
+                ttl_seconds=config.threat_detection.mark_ttl_seconds,
+                include_client_ip=config.alerting.include_client_ip,
+            )
+            threat_detector = ThreatDetector(
+                config.threat_detection,
+                metrics,
+                offenders,
+                include_client_ip=config.alerting.include_client_ip,
+            )
+
+        ddos_detector: DdosDetector | None = None
+        if previous is not None and config.ddos_detection == previous.config.ddos_detection:
+            ddos_detector = previous.ddos_detector
+        elif config.ddos_detection.enabled:
+            ddos_detector = DdosDetector(config.ddos_detection, metrics)
 
         alert_dispatcher: AlertDispatcher | None = None
         if config.alerting.enabled:
@@ -149,34 +221,23 @@ class Runtime:
                 )
             except AlertConfigurationError as exc:
                 raise ConfigError(str(exc)) from exc
-            alert_dispatcher = AlertDispatcher(
-                url=webhook_url,
-                token=alert_token,
-                timeout=config.alerting.timeout_seconds,
-                max_queue=config.alerting.max_queue,
-                cooldown_seconds=config.alerting.cooldown_seconds,
-                metrics=metrics,
-            )
-
-        offenders: OffenderRegistry | None = None
-        threat_detector: ThreatDetector | None = None
-        if config.threat_detection.enabled:
-            offenders = OffenderRegistry(
-                config.threat_detection.offender_path,
-                max_entries=config.threat_detection.max_tracked_actors,
-                ttl_seconds=config.threat_detection.mark_ttl_seconds,
-                include_client_ip=config.alerting.include_client_ip,
-            )
-            threat_detector = ThreatDetector(
-                config.threat_detection,
-                metrics,
-                offenders,
-                include_client_ip=config.alerting.include_client_ip,
-            )
-
-        ddos_detector: DdosDetector | None = None
-        if config.ddos_detection.enabled:
-            ddos_detector = DdosDetector(config.ddos_detection, metrics)
+            if (
+                previous is not None
+                and previous.alert_dispatcher is not None
+                and config.alerting == previous.config.alerting
+                and previous.alert_dispatcher.url == webhook_url
+                and previous.alert_dispatcher.token == alert_token
+            ):
+                alert_dispatcher = previous.alert_dispatcher
+            else:
+                alert_dispatcher = AlertDispatcher(
+                    url=webhook_url,
+                    token=alert_token,
+                    timeout=config.alerting.timeout_seconds,
+                    max_queue=config.alerting.max_queue,
+                    cooldown_seconds=config.alerting.cooldown_seconds,
+                    metrics=metrics,
+                )
 
         return cls(
             config=config,
@@ -193,6 +254,8 @@ class Runtime:
             threat_detector=threat_detector,
             ddos_detector=ddos_detector,
             offenders=offenders,
+            started_epoch=previous.started_epoch if previous is not None else time.time(),
+            started_monotonic=previous.started_monotonic if previous is not None else time.monotonic(),
         )
 
     def uptime_seconds(self) -> float:

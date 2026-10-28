@@ -268,10 +268,12 @@ class GatewayHarness:
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        self.server.begin_drain()
         self.server.shutdown()
         self.server.server_close()
+        self.server.wait_for_drain(1.0)
         self.thread.join(timeout=2.0)
-        self.runtime.close()
+        self.server.close_all_runtimes()
 
 
 def build_request(

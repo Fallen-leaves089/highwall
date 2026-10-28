@@ -68,6 +68,7 @@ class InitConfigTests(unittest.TestCase):
 
         self.assertEqual(config.server.listen_port, 18090)
         self.assertEqual(config.server.max_inflight_requests, 32)
+        self.assertEqual(config.server.shutdown_timeout, 30.0)
         self.assertTrue(config.upstream.circuit_breaker.enabled)
         self.assertEqual(config.upstream.port, 8080)
         self.assertEqual(config.policy.allowed_hosts, ("example.test",))
