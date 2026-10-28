@@ -31,10 +31,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Normalize image reference
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
       - id: meta
         uses: docker/metadata-action@318604b99e75e41977312d83839a89be02ca4893 # v5.9.0
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -68,7 +72,7 @@ jobs:
       - name: Attest image provenance
         uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
         with:
-          subject-name: ghcr.io/${{ github.repository }}
+          subject-name: ${{ steps.image.outputs.name }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push: true
 
@@ -79,5 +83,5 @@ jobs:
 
       - name: Sign published image
         env:
-          IMAGE: ghcr.io/${{ github.repository }}@${{ steps.build.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE"
