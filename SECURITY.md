@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-HighWall 当前源码版本为 `0.10.0`，最新已发布版本是 `0.9.0`。只有最新发布版本接收安全修复；旧版本不承诺回补。
+HighWall 当前源码与最新发布版本均为 `0.10.0`。只有最新发布版本接收安全修复；旧版本不承诺回补。
 
 ## Reporting a vulnerability
 

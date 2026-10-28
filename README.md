@@ -6,7 +6,7 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代理与防护网关**。它只使用 Python 标准库，目标是把应用入口处最容易出现分歧的解析、策略、资源限制和审计做成可审计的小内核。
 
-当前源码版本：`0.10.0`（最新已发布版本仍为 `0.9.0`）。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明，并收紧查询参数与 JSON body 中的路径穿越识别（含多重编码）。它仍不是已经完成第三方审计的生产级产品。
+当前源码与最新发布版本：`0.10.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明，并收紧查询参数与 JSON body 中的路径穿越识别（含多重编码）。它仍不是已经完成第三方审计的生产级产品。
 
 > **v0.10 重点**：上线前用 `highwall diff` 区分可热加载、必须重启和安全降级；CI 与发布镜像增加可复现的静态检查、来源证明和签名。热加载细节见 [配置热加载与优雅停机](#配置热加载与优雅停机)。
 
@@ -324,6 +324,12 @@ upstream application (ideally loopback or private network)
 
 要求 Windows PowerShell 5.1 或更新版本、Python 3.10 或更新版本，不安装第三方依赖。
 
+不想使用源码检出时，可从 [v0.10.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.10.0) 下载 wheel/sdist 和 `SHA256SUMS`，校验后安装：
+
+```bash
+python -m pip install highwall-0.10.0-py3-none-any.whl
+```
+
 ```powershell
 Set-Location <HighWall checkout>
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1 `
@@ -386,10 +392,10 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 ## 容器镜像
 
-版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.9.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.9.0)。最新已发布镜像仍是 `0.9.0`；`v0.10.0` tag 发布后，工作流才会为该镜像生成 cosign 签名和 GitHub provenance attestation。`0.9.0` 镜像没有这些新增证明，不能反向声称已签名。
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.10.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.10.0)。`0.10.0` 镜像随 tag 发布，并带有 cosign 签名和 GitHub provenance attestation；更早的 `0.9.0` 镜像没有这些证明，不能反向声称已签名。
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.9.0
+docker pull ghcr.io/fallen-leaves089/highwall:0.10.0
 ```
 
 镜像以 UID `10001` 非 root 运行，默认执行 `python -m highwall serve -c /etc/highwall/config.json`。镜像不内置配置，缺少配置时会直接拒绝启动，不会退化为放行。
@@ -416,7 +422,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.9.0
+  ghcr.io/fallen-leaves089/highwall:0.10.0
 ```
 
 - 生产环境启用 TLS 时，把证书和私钥只读挂载到容器内，并在配置中使用容器内路径。
