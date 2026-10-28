@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import threading
 import time
 from collections import OrderedDict, deque
@@ -20,6 +21,22 @@ from .tlsfingerprint import TLSProfile
 _EVENT_RULE_IDS = {
     "suspected": "HW-THREAT-1001",
     "confirmed": "HW-THREAT-1002",
+}
+
+_AGENT_MIN_REQUESTS = 6
+_AUTOMATION_UA_RE = re.compile(
+    r"(?:^|[\s/])(?:curl|wget|httpie|python-requests|python-urllib|httpx|aiohttp|requests|"
+    r"go-http-client|okhttp|java|libwww-perl|node-fetch|axios|undici|postmanruntime|"
+    r"insomnia|powershell|headlesschrome)(?:[/\s-]|$)",
+    re.I,
+)
+_BROWSER_HEADERS = {
+    "accept-language",
+    "sec-fetch-site",
+    "sec-fetch-mode",
+    "sec-fetch-dest",
+    "sec-ch-ua",
+    "upgrade-insecure-requests",
 }
 
 
@@ -41,6 +58,8 @@ class ThreatAssessment:
     delay_ms: int
     hold_seconds: float
     retry_after: float
+    ban_ip: bool = False
+    ban_seconds: float = 0.0
     alert: dict[str, Any] | None = None
     offender: OffenderRecord | None = None
 
@@ -48,7 +67,9 @@ class ThreatAssessment:
 @dataclass
 class _ActorState:
     requests: deque[float] = field(default_factory=deque)
+    agent_events: deque[tuple[float, bool, bool, bool, str]] = field(default_factory=deque)
     paths: OrderedDict[str, float] = field(default_factory=OrderedDict)
+    query_variants: OrderedDict[str, set[str]] = field(default_factory=OrderedDict)
     violations: deque[tuple[float, str]] = field(default_factory=deque)
     last_seen: float = 0.0
     first_trigger: float = 0.0
@@ -94,15 +115,24 @@ class ThreatDetector:
         cutoff = now - self.config.window_seconds
         while state.requests and state.requests[0] < cutoff:
             state.requests.popleft()
+        while state.agent_events and state.agent_events[0][0] < cutoff:
+            state.agent_events.popleft()
         while state.paths:
             _, seen = next(iter(state.paths.items()))
             if seen >= cutoff:
                 break
             state.paths.popitem(last=False)
+        while state.query_variants:
+            key, _ = next(iter(state.query_variants.items()))
+            if state.paths.get(key, 0) >= cutoff:
+                break
+            state.query_variants.popitem(last=False)
         while state.violations and state.violations[0][0] < cutoff:
             state.violations.popleft()
         while len(state.paths) > self.config.max_paths_per_actor:
             state.paths.popitem(last=False)
+        while len(state.query_variants) > self.config.max_paths_per_actor:
+            state.query_variants.popitem(last=False)
 
     def _state_for(self, fingerprint: str, now: float) -> _ActorState:
         state = self._states.get(fingerprint)
@@ -132,6 +162,37 @@ class ThreatDetector:
         if violation_ratio >= 1.0:
             signals.append("policy_violations")
         return score, tuple(signals), request_count, distinct_paths, violation_count
+
+    def _agent_signals(self, state: _ActorState) -> tuple[int, tuple[str, ...]]:
+        events = list(state.agent_events)
+        count = len(events)
+        if count < _AGENT_MIN_REQUESTS:
+            return 0, ()
+        automation = sum(1 for event in events if event[1])
+        browser = sum(1 for event in events if event[2])
+        cookies = sum(1 for event in events if event[3])
+        signals: list[str] = []
+        if automation >= max(3, count // 2):
+            signals.append("agent_user_agent")
+        if browser == 0:
+            signals.append("agent_no_browser_headers")
+        if cookies == 0:
+            signals.append("agent_no_cookies")
+        intervals = [later[0] - earlier[0] for earlier, later in zip(events, events[1:])]
+        if len(intervals) >= 5:
+            mean = sum(intervals) / len(intervals)
+            if mean > 0:
+                deviation = (sum((value - mean) ** 2 for value in intervals) / len(intervals)) ** 0.5
+                if deviation / mean <= 0.25:
+                    signals.append("agent_regular_timing")
+        path_counts: dict[str, int] = {}
+        for event in events:
+            path_counts[event[4]] = path_counts.get(event[4], 0) + 1
+        if max(path_counts.values(), default=0) / count >= 0.6:
+            signals.append("agent_path_focus")
+        if max((len(values) for values in state.query_variants.values()), default=0) >= 6:
+            signals.append("agent_query_fuzzing")
+        return len(signals), tuple(signals)
 
     def _alert_due(self, state: _ActorState, now: float, event: str) -> bool:
         if state.last_alert_event != event:
@@ -221,6 +282,11 @@ class ThreatDetector:
     ) -> ThreatAssessment:
         self._prune_actor(state, now)
         score, signals, request_count, distinct_paths, violation_count = self._score(state)
+        agent_count, agent_signals = self._agent_signals(state)
+        agent_like = agent_count >= self.config.agent_min_signals
+        if agent_like:
+            score = min(100, score + self.config.agent_score)
+            signals = signals + ("agent_like",) + agent_signals
         match: OffenderMatch | None = self.offenders.get(fingerprint, shape)
         exact_match = match if match is not None and match.exact else None
         if exact_match is not None:
@@ -236,7 +302,8 @@ class ThreatDetector:
         exact_confirmed = (
             exact_match is not None and exact_match.record.confidence == "confirmed"
         )
-        triggered = score >= self.config.score_threshold or exact_confirmed
+        agent_contain = agent_like and self.config.agent_mode in {"block", "throttle"}
+        triggered = score >= self.config.score_threshold or exact_confirmed or agent_contain
         if triggered:
             if state.first_trigger <= 0:
                 state.first_trigger = now
@@ -244,10 +311,13 @@ class ThreatDetector:
                 state.containment_until,
                 now + self.config.containment_seconds,
             )
-            confirm = allow_confirm and (
-                score >= self.config.confirm_score
-                or exact_confirmed
-                or (state.first_trigger > 0 and now - state.first_trigger >= self.config.confirm_after_seconds)
+            confirm = agent_contain or (
+                allow_confirm
+                and (
+                    score >= self.config.confirm_score
+                    or exact_confirmed
+                    or (state.first_trigger > 0 and now - state.first_trigger >= self.config.confirm_after_seconds)
+                )
             )
             if confirm:
                 state.confidence = "confirmed"
@@ -266,6 +336,10 @@ class ThreatDetector:
 
         confidence = state.confidence
         action, delay_ms, hold_seconds = self._action_for(confidence, score)
+        if agent_contain and confidence == "confirmed":
+            action = self.config.agent_mode
+            delay_ms = self.config.max_throttle_ms if action == "throttle" else 0
+            hold_seconds = 0.0
         alert: dict[str, Any] | None = None
         if confidence in {"suspected", "confirmed"}:
             event = "threat_confirmed" if confidence == "confirmed" else "threat_suspected"
@@ -311,6 +385,7 @@ class ThreatDetector:
             self.metrics.set("offender_marks", float(self.offenders.size()))
 
         retry_after = max(0.0, state.containment_until - now) if action == "block" else 0.0
+        ban_ip = agent_contain and self.config.agent_mode == "block"
         return ThreatAssessment(
             fingerprint=fingerprint,
             shape_fingerprint=shape,
@@ -324,6 +399,8 @@ class ThreatDetector:
             delay_ms=delay_ms,
             hold_seconds=hold_seconds,
             retry_after=retry_after,
+            ban_ip=ban_ip,
+            ban_seconds=max(1.0, retry_after) if ban_ip else 0.0,
             alert=alert,
             offender=exact_match.record if exact_match is not None else None,
         )
@@ -355,9 +432,28 @@ class ThreatDetector:
         now = self._clock()
         with self._lock:
             state = self._state_for(fingerprint, now)
+            path_key = self._path_key(head.target)
+            user_agent = next(
+                (value for name, value in head.headers if name.lower() == "user-agent"),
+                "",
+            )
             state.requests.append(now)
-            state.paths[self._path_key(head.target)] = now
-            state.paths.move_to_end(self._path_key(head.target))
+            state.agent_events.append(
+                (
+                    now,
+                    _AUTOMATION_UA_RE.search(user_agent) is not None,
+                    any(name.lower() in _BROWSER_HEADERS for name, _ in head.headers),
+                    any(name.lower() == "cookie" for name, _ in head.headers),
+                    path_key,
+                )
+            )
+            state.paths[path_key] = now
+            state.paths.move_to_end(path_key)
+            query = head.target.partition("?")[2]
+            variants = state.query_variants.setdefault(path_key, set())
+            if len(variants) < 32:
+                variants.add(query)
+            state.query_variants.move_to_end(path_key)
             return self._evaluate(
                 state,
                 fingerprint=fingerprint,

@@ -6,9 +6,9 @@ English | [简体中文](README.md)
 
 HighWall is a **fail-closed HTTP/1.1 application-layer reverse proxy and security gateway**. It uses only the Python standard library and aims to turn the parsing, policy, resource-limit, and audit decisions most prone to ambiguity at an application entry point into a small, auditable core.
 
-Current version: `0.9.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 adds atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics. It is still not a production-grade product that has completed an independent third-party audit.
+Current source version: `0.10.0` (the latest published version is still `0.9.0`). v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 added atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics; v0.10 adds `highwall diff` preflight, CI lint/type/coverage gates, CodeQL, Dependabot, signed/attested release images, and tighter path-traversal detection in query parameters and JSON bodies (including multi-encoding). It is still not a production-grade product that has completed an independent third-party audit.
 
-> **v0.9 focus**: atomic configuration reload, fail-safe rollback to the active configuration, TLS certificate rotation, and graceful drain. See [Configuration reload and graceful drain](#configuration-reload-and-graceful-drain).
+> **v0.10 focus**: use `highwall diff` before promotion to distinguish reloadable changes, restart requirements, and security regressions; CI and release images now have reproducible static checks, provenance, and signatures. See [Configuration reload and graceful drain](#configuration-reload-and-graceful-drain).
 
 ## Contents
 
@@ -20,6 +20,7 @@ Current version: `0.9.0`. v0.3 expanded the protection goal from response leakag
 - [Enabling threat protection](#enabling-threat-protection)
 - [Quick start](#quick-start)
 - [Configuration highlights](#configuration-highlights)
+- [Configuration comparison](#configuration-comparison)
 - [Troubleshooting](#troubleshooting)
 - [Deployment principles](#deployment-principles)
 - [Tests and smoke checks](#tests-and-smoke-checks)
@@ -30,12 +31,14 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 
 - **Fail-closed**: ambiguous input, invalid configuration, or upstream failure returns an error instead of being silently allowed.
 - **No third-party runtime dependencies**: the core proxy uses only the Python standard library, which keeps it easy to audit and deploy.
-- **Verifiable**: built-in tests, `highwall check` / `inspect`, a local quickstart, and structured JSONL audit output.
+- **Verifiable**: built-in tests, `highwall check` / `inspect` / `diff`, a local quickstart, and structured JSONL audit output.
 
 - Good fit: internal services, static sites, admin surfaces, and small APIs that need an extra ingress layer.
 - Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
 
-> HighWall is still at `0.9.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+> HighWall is still at `0.10.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+
+> **Protection boundary**: WAF signatures, DLP, behavior scoring, and honeypots are heuristics that reduce exposure. They are not an authentication or security boundary; they cannot distinguish a compromised same-host or same-namespace client, and DLP must not be sold as a leak-prevention guarantee.
 
 ## 30-second demo
 
@@ -214,6 +217,8 @@ Recommended rollout:
 
 `monitor` does not slow or block requests, but a `confirmed` actor is still written to `offenders.json` so the correlation survives a restart. If you do not want persistent marks yet, do not enable `threat_detection` or point `offender_path` at a separate temporary directory.
 
+`threat_detection.agent_mode` defaults to `score`: requests that look like obvious scripts or agents (automation user agent, missing browser headers, no cookies, regular timing, single-path focus, or query scanning on one path) only add score. To contain them in an enterprise deployment, change only this line: `block` bans the source IP, and `throttle` rate-limits the current fingerprint/request shape. This switch does not depend on `rate_limit.auto_ban_threshold`. `throttle` is not an IP-level ban: rotating the user agent or request shape can obtain a fresh quota, so use `block` when obvious agents need hard containment. `agent_min_signals` defaults to 3 and `agent_score` to 30.
+
 Merge these key fields into the existing configuration (this fragment is not a complete configuration):
 
 ```json
@@ -282,7 +287,7 @@ HighWall is an L7 gateway, not an “absolute” defense:
 - It **cannot prevent ransomware or destructive attacks**. An L7 gateway cannot stop a process with host write access from deleting files. Use low-privilege accounts, controlled folders, EDR, offline or immutable backups, and recovery drills.
 - It **cannot replace a host firewall or network segmentation**. Client CIDR ACLs only process HTTP requests that reach HighWall; they do not cover DNS tunnels, RPC, raw sockets, or other non-HTTP traffic.
 - `read_only` blocks only `POST`, `PUT`, `PATCH`, and `DELETE` by HTTP method. It cannot detect a bad business design that causes side effects through `GET`.
-- Integrity pinning covers only exact static `GET` paths and status codes in the configuration. It does not cover query strings, dynamic pages, HEAD, WebSocket, or streaming responses.
+- Integrity pinning covers only exact static `GET` paths and status codes in the configuration. Query strings are not part of the match and adding one does not bypass the check. It does not cover HEAD, dynamic pages, response headers, WebSocket, or streaming responses.
 - Honeypots cover only explicitly configured exact paths and cannot discover every scan. They may be fingerprinted, accidental bans can affect shared NAT sources, and they provide no high-interaction shell, file drop, or counterattack capability.
 - The circuit breaker intentionally returns 503 while an upstream is failing repeatedly. It is failure isolation, not DDoS scrubbing or a capacity guarantee.
 - It **does not proxy** WebSocket, HTTP/2, or bidirectional streaming responses; an Upgrade request is rejected. Responses are buffered up to `max_response_bytes`.
@@ -381,7 +386,7 @@ The admin token is read only from the environment. Do not put it in `config.json
 
 ## Container image
 
-Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.9.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.9.0).
+Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.9.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.9.0). The latest published image is still `0.9.0`; only after a `v0.10.0` tag is published will the workflow add a cosign signature and GitHub provenance attestation. The `0.9.0` image does not have these new attestations and must not be described as signed.
 
 ```bash
 docker pull ghcr.io/fallen-leaves089/highwall:0.9.0
@@ -417,6 +422,16 @@ docker run --rm --name highwall \
 - For TLS in production, mount the certificate and private key read-only and reference their in-container paths from the configuration.
 - Do not expose the admin plane. It is disabled by default; if enabled, keep it on a controlled network.
 - `latest` follows the most recent release tag. Pin an exact version for production deployments.
+- Images published from `v0.10.0` onward can be verified with the following commands; replace the version with the exact immutable tag you deploy:
+
+```bash
+gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.10.0 \
+  --repo Fallen-leaves089/highwall
+
+cosign verify ghcr.io/fallen-leaves089/highwall:0.10.0 \
+  --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
 
 ## Configuration highlights
 
@@ -427,7 +442,7 @@ docker run --rm --name highwall \
 - `policy.waf_mode`: `detect` only records a hit; `block` rejects the request. Start an unknown application with `detect`.
 - `policy.trusted_proxies`: populate this only when HighWall really sits behind a trusted reverse proxy. Never use `0.0.0.0/0`.
 - `policy.allowed_client_networks` / `denied_client_networks`: optional CIDR ACLs with deny precedence. An empty list means no source-network filtering. This is an L7 decision and does not replace a host firewall.
-- `policy.allowed_origins`: optional canonical Origin allowlist, for example `https://app.example.com`. Once configured, `POST`, `PUT`, `PATCH`, and `DELETE` must carry an allowed Origin, and cross-site writes are rejected. When empty, the original non-browser-compatible behavior is preserved.
+- `policy.allowed_origins`: optional canonical Origin allowlist, for example `https://app.example.com`. Once configured, `POST`, `PUT`, `PATCH`, and `DELETE` must carry an allowed Origin, and cross-site writes are rejected. When empty, the original non-browser-compatible behavior is preserved. Browser cross-origin writes send an `OPTIONS` preflight first, so add `OPTIONS` to `allowed_methods` when enabling this allowlist and make sure the upstream answers the preflight.
 - `policy.read_only`: global read-only switch; `routes[].read_only` applies only to the matching longest prefix. It cannot detect GET side effects.
 - `policy.routes`: selected by longest path prefix. Supports `methods`, `read_only`, `max_body_bytes`, `max_concurrent`, `rate`, `rate_burst`, and `allowed_client_networks`. Route methods must be a subset of global `allowed_methods`; an empty route source list is rejected rather than silently allowed. `rate` is tokens per client per second; when `rate_burst` is omitted it defaults to the rate rounded up.
 - `policy.honeypot`: disabled by default. Once enabled, exact normalized paths serve decoys, using built-in `presets` or custom `routes` with a static status, Content-Type, body, restricted response headers, server identity, first-hit ban, and a 0-5000 ms delay. Hits never touch the upstream and bypass ordinary method/Content-Type/WAF/read-only restrictions to preserve the trap. Host and client ACL checks still take precedence.
@@ -439,20 +454,45 @@ docker run --rm --name highwall \
 - `policy.response_scan_mode` / `response_scan_max_bytes` / `response_scan_headers`: secret and debug-information scanning for upstream responses. Supports `off`, `detect`, and `block`; only a bounded prefix, 1 MiB by default, is scanned. Media types are not treated as an exemption, and decoding attempts cover UTF-8, Latin-1, and UTF-16. Response headers are scanned by default, with `Set-Cookie` always excluded.
 - `server.max_connections_per_ip`: concurrent connection limit for a single source IP; `0` disables it, and trusted-proxy sources are not counted. It does not replace the total connection limit.
 - `policy.routes[].max_concurrent`: route-level in-flight limit; `0` disables it, and it cannot exceed `server.max_connections`. Rejections return 503 with `Retry-After`.
-- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`: temporarily reject a source after protocol or policy errors accumulate within a time window; `threshold=0` disables it. Ban state is in memory only and is cleared on restart.
-- `threat_detection`: multi-signal fingerprints, two-stage confirmation, bounded slow slots, and persistent marks. Disabled by default; start with `mode=monitor`, then move to `tarpit`. `containment_seconds=300` is the suspected window, while `confirmed_containment_seconds=900` is the confirmed slow window. `offender_path` must be a protected writable path.
+- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`: temporarily reject a source after protocol or policy errors accumulate within a time window; `threshold=0` disables this error-count path but does not disable targeted bans from `threat_detection.agent_mode=block`. Ban state is in memory only and is cleared on restart.
+- `threat_detection`: multi-signal fingerprints, two-stage confirmation, bounded slow slots, and persistent marks. Disabled by default; start with `mode=monitor`, then move to `tarpit`. `agent_mode` defaults to `score` (score only); set it to `block` or `throttle` to contain obvious automation directly. `block` bans the source IP; `throttle` limits only the current fingerprint and can be evaded by changing the request shape. `containment_seconds=300` is the suspected window, while `confirmed_containment_seconds=900` is the confirmed slow window. `offender_path` must be a protected writable path.
 - `ddos_detection`: aggregates L7 request rate, rejection ratio, connection saturation, TLS failures, and upstream errors. `escalation_seconds=300` means a 5-minute sustained signal window before escalation; `recovery_seconds` controls recovery events. It does not scrub bandwidth-based DDoS.
 - `alerting`: asynchronous webhook delivery. When `enabled=true`, `HIGHWALL_ALERT_WEBHOOK` is required and defaults to HTTPS only; `HIGHWALL_ALERT_TOKEN` is optional. `include_client_ip` and `allow_http` both default to `false`. A full queue drops alerts and increments `alert_dropped_total` without blocking requests.
 - `upstream.total_timeout`: absolute limit for the complete upstream exchange (connect, response headers, and response body); `read_timeout` is the per-read limit.
 - `server.tls`: server-side TLS only; it does not replace upstream TLS verification. Certificate and key paths are resolved relative to the configuration file. The handshake runs in a worker thread under `handshake_timeout`, so a slow handshake does not block new accepts. When TLS is enabled without explicit HSTS, a one-year HSTS header is added automatically. After replacing certificate files or paths, use `POST /reload` so new handshakes pick up the new certificate.
-- `audit.path`: relative paths resolve from the configuration directory. The log directory must be protected from both the service account and the operations account. `audit.path_mode` supports `redact` (default), `hash`, and `exact`; the default mode cleans and decodes paths and redacts sensitive keys, following values, and obvious high-entropy segments.
+- `audit.path`: relative paths resolve from the configuration directory. The log directory must be protected from both the service account and the operations account. `audit.path_mode` supports `redact` (default), `hash`, and `exact`; the default mode cleans and decodes paths and redacts sensitive keys, following values, and obvious high-entropy segments. `audit.on_write_failure` defaults to `fail_closed`: once a runtime write fails, subsequent requests receive 503; set it to `continue` to count and continue. An unwritable path still refuses startup.
 - `admin.enabled`: disabled by default; when enabled, loopback binding and a token are mandatory. The admin plane exposes `/healthz`, `/metrics`, `/offenders`, `/audit/tail`, and a protected `POST /reload`.
 
 See [`config.example.json`](config.example.json) for the complete example. Honeypot configuration is documented in [`docs/HONEYPOT.md`](docs/HONEYPOT.md), threat boundaries in [`docs/THREAT_MODEL.md`](docs/THREAT_MODEL.md), the deployment baseline in [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md), and vulnerability reporting in [`SECURITY.md`](SECURITY.md). These detailed documents are currently written in Chinese.
 
+## Configuration comparison
+
+`highwall check --strict` also checks high-risk configuration switches. Only `high` severity warnings make it exit `4`; `medium` warnings are still printed without failing. Use it in enterprise CI to keep these combinations out of production: non-empty `trusted_proxies`, enabling semicolon path parameters or trailing dots/spaces, disabling encoded-separator or duplicate-header rejection, disabling WAF, configuring integrity pins while enforcement is off, and changing audit write failures to `continue`.
+
+`highwall check` only answers whether a candidate configuration can start. `highwall diff` compares the **effective values** after parsing, default expansion, and path normalization, then answers what changes, whether a restart is required, and whether an existing security control is weakened. It does not print admin tokens, webhook tokens, or other secrets; only environment variable names are retained.
+
+```powershell
+python -m highwall diff -c config.json --candidate config.next.json
+python -m highwall diff -c config.json --candidate config.next.json --json
+```
+
+The candidate is fully loaded and checked, including TLS and the admin token. An invalid candidate returns `2` before comparison. Ordering-only differences in Host/method/CIDR allowlists do not produce false changes.
+
+| Exit code | Meaning | Suggested action |
+|---|---|---|
+| `0` | No effective changes | Continue other checks |
+| `1` | Reloadable changes only, with no detected security regression | Review `security_review`, then apply with `SIGHUP` or `POST /reload` |
+| `2` | Invalid configuration or command line | Fix the configuration; do not start or reload |
+| `3` | Restart-required fields changed, with no blocking security regression | Schedule a rolling restart and review the change |
+| `4` | A security regression was detected | Block promotion by default; proceed only after confirming the weakening is intentional |
+
+Security regressions include disabling WAF/DLP/rate limiting/read-only mode, disabling TLS or lowering the minimum TLS version, widening Host/method/path/CIDR/Origin allowlists, removing security headers or integrity pins, weakening threat containment, and relaxing route method/source/body/concurrency/rate limits. Upstream target, admin enablement, TLS certificate/key path, and audit-path changes are reported as non-blocking `security_review` items that still need human review. `diff` is a change-review tool, not proof that a configuration has no vulnerabilities.
+
 ## Configuration reload and graceful drain
 
 HighWall supports atomic configuration reload and drained shutdown. A reload fully loads and validates the new configuration and builds a new runtime and TLS context. If any step fails, the old configuration and connections remain active and the process keeps serving.
+
+Run `highwall diff` first: exit code `4` must be treated as a security regression, while exit code `3` means the change cannot be applied by reload alone and needs a rolling restart.
 
 - Use `SIGHUP` on POSIX, or the protected admin `POST /reload` endpoint on Windows (the admin plane must be enabled and the request must carry the Bearer token).
 - Reloadable settings include policy, routes, upstream, rate limits, audit, alerting, threat/DDoS detection, the admin token, TLS certificate contents and paths, and timeouts.
@@ -483,7 +523,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 4. Keep the upstream on loopback or a private network and use a host firewall to restrict gateway-to-upstream and operations-to-admin traffic.
 5. Enable TLS in production and grant private-key access only to the service account. Do not expose a self-signed certificate to external users.
 6. Preserve existing network isolation and user/namespace separation. HighWall cannot replace operating-system boundaries.
-7. Run `highwall check` and `highwall inspect` before starting the service. A bad configuration should make the process refuse to start rather than fail open.
+7. Run `highwall check` and `highwall inspect` before starting the service, and run `highwall diff` before promoting a configuration. A bad configuration should make the process refuse to start rather than fail open.
 8. Continuously ship audit logs off-host or write them to immutable storage. A locally writable log cannot resist an attacker with the same privileges. Run offline recovery drills regularly.
 9. Prefer route-level read-only mode, method subsets, and source restrictions for high-risk write APIs. Do not let `GET` perform deletion, transfers, configuration changes, or other side effects.
 10. Observe fingerprints and marks in `monitor` mode first, confirm shared NAT and normal automation are not harmed, then enable `tarpit`; protect the mark file and audit logs with the same ACL discipline.
@@ -493,10 +533,14 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 ```powershell
 Set-Location <HighWall checkout>
-python -m unittest discover -s tests -v
+python -m pip install -e ".[dev]"
+python -m ruff check highwall scripts tests
+python -m mypy
+python -m coverage run --branch -m unittest discover -s tests -v
+python -m coverage report
 ```
 
-Tests use temporary directories and temporary loopback ports only. They do not modify firewalls, port proxies, or external services.
+Tests use temporary directories and temporary loopback ports only. They do not modify firewalls, port proxies, or external services. `coverage report` reads the 80% line/branch gate from `pyproject.toml` and exits non-zero below it.
 
 To check only threat detection, attacker marks, slow slots, the DDoS state machine, and the Webhook queue:
 
@@ -507,11 +551,32 @@ python -m unittest tests.test_threat -v
 Before a release, also verify syntax and the example configuration:
 
 ```powershell
-python -m compileall -q highwall
+python -m compileall -q highwall scripts tests
 python -m highwall check -c config.example.json
+python -m highwall check -c config.example.json --strict
+python -m highwall diff -c config.example.json --candidate config.example.json
 ```
 
-The current suite covers strict parsing, path-parameter and trailing-dot bypasses, case-variant route bypasses, request encoding, a WAF bypass matrix, DLP (binary, UTF-16, response headers, and `Set-Cookie` false positives), route rate limits, HSTS, audit redaction, route policies, read-only mode, response pinning, the circuit-breaker state machine, in-flight and route-concurrency backpressure, custom honeypots, first-hit bans, attacker fingerprints/marks/slow slots, the DDoS state machine, alert deduplication and queue backpressure, the admin plane, configuration generation and overwrite rules, and the host-audit script. Windows integration tests start a real loopback gateway and verify TLS fingerprint correlation, confirmed slow responses, zero upstream forwarding for tarpitted requests, audit persistence, drift detection, reconfiguration backups, and shutdown flow without modifying the firewall, port proxies, or external services.
+The parser fuzzer uses a deterministic seed and treats only `HighWallError` as an expected rejection; any other exception, timeout, or crash fails the run:
+
+```powershell
+python -m scripts.fuzz_parser --iterations 20000 --seed 20261028
+```
+
+Fuzzing finds unhandled parser-boundary exceptions and performance regressions. It is not a formal proof and does not replace code review.
+
+The local performance baseline uses a temporary loopback upstream and ephemeral ports:
+
+```powershell
+python -m scripts.benchmark_proxy
+python -m scripts.benchmark_proxy --json
+```
+
+It measures direct-upstream, HighWall-allowed, and WAF-blocked requests and reports p50/p95/p99 plus throughput. Results depend on host load, audit writes, DLP/WAF rules, and the Python version. Treat them as a same-host regression baseline, not a capacity SLA or procurement commitment.
+
+The current suite covers strict parsing, path-parameter and trailing-dot bypasses, case-variant route bypasses, request encoding, a WAF bypass matrix, DLP (binary, UTF-16, response headers, and `Set-Cookie` false positives), route rate limits, HSTS, audit redaction, route policies, read-only mode, response pinning, the circuit-breaker state machine, in-flight and route-concurrency backpressure, custom honeypots, first-hit bans, attacker fingerprints/marks/slow slots, the DDoS state machine, alert deduplication and queue backpressure, the admin plane, configuration generation and overwrite rules, diff restart/security-regression classification, and the host-audit script. Windows integration tests start a real loopback gateway and verify TLS fingerprint correlation, confirmed slow responses, zero upstream forwarding for tarpitted requests, audit persistence, drift detection, reconfiguration backups, and shutdown flow without modifying the firewall, port proxies, or external services.
+
+GitHub Actions runs Ruff, mypy, coverage, and the full suite on Ubuntu/Windows with Python 3.10–3.12. CodeQL scans every pull request and weekly; Dependabot checks Actions, Python development dependencies, and the Docker base image weekly. All third-party Actions are pinned to commit SHAs, and release images carry an SBOM, provenance, a cosign signature, and a GitHub attestation.
 
 ## License
 

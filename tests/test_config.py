@@ -6,7 +6,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from highwall.config import ConfigError, canonicalize_host, canonicalize_origin, load_config, parse_config
+from highwall.config import (
+    ConfigError,
+    canonicalize_host,
+    canonicalize_origin,
+    load_config,
+    parse_config,
+)
 from highwall.runtime import load_admin_token
 from tests.support import base_config
 
@@ -36,7 +42,21 @@ class ConfigTests(unittest.TestCase):
         self.assertFalse(config.policy.allow_trailing_dot_or_space)
         self.assertTrue(config.policy.response_scan_headers)
         self.assertEqual(config.audit.path_mode, "redact")
+        self.assertEqual(config.audit.on_write_failure, "fail_closed")
+        self.assertEqual(config.threat_detection.agent_mode, "score")
         self.assertEqual(config.rate_limit.auto_ban_threshold, 20)
+
+    def test_audit_and_agent_modes_are_validated(self) -> None:
+        cases = (
+            {"audit": {"on_write_failure": "sometimes"}},
+            {"threat_detection": {"agent_mode": "ban"}},
+        )
+        for overrides in cases:
+            with self.subTest(overrides=overrides):
+                data = minimal()
+                data.update(overrides)
+                with self.assertRaises(ConfigError):
+                    parse_config(data)
 
     def test_canonicalize_origin(self) -> None:
         self.assertEqual(canonicalize_origin("HTTPS://Example.TEST:443/"), "https://example.test")

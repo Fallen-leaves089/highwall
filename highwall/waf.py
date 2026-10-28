@@ -15,8 +15,21 @@ import urllib.parse
 from dataclasses import dataclass
 from typing import Iterable
 
-from .config import ConfigError, HoneypotRoute, PolicyConfig, RouteConfig, canonicalize_host, canonicalize_origin
-from .errors import BadRequest, Forbidden, MethodNotAllowed, PayloadTooLarge, UnsupportedMediaType
+from .config import (
+    ConfigError,
+    HoneypotRoute,
+    PolicyConfig,
+    RouteConfig,
+    canonicalize_host,
+    canonicalize_origin,
+)
+from .errors import (
+    BadRequest,
+    Forbidden,
+    MethodNotAllowed,
+    PayloadTooLarge,
+    UnsupportedMediaType,
+)
 from .protocol import RequestHead, header_values, single_header
 
 _MAX_DECODE_ROUNDS = 4
@@ -319,7 +332,11 @@ def validate_head(head: RequestHead, client_ip: str, policy: PolicyConfig) -> He
         )
 
     if head.method not in policy.allowed_methods:
-        raise MethodNotAllowed("method is not allowed", rule_id="HW-METHOD-1001")
+        raise MethodNotAllowed(
+            "method is not allowed",
+            rule_id="HW-METHOD-1001",
+            allow=tuple(dict.fromkeys(policy.allowed_methods)),
+        )
     if not _path_allowed(route_path, policy.allowed_path_prefixes):
         raise Forbidden("path is outside the allowed prefixes", rule_id="HW-PATH-1101")
     if _denied_path(route_path, policy.deny_path_prefixes):
@@ -328,7 +345,11 @@ def validate_head(head: RequestHead, client_ip: str, policy: PolicyConfig) -> He
     if route is not None:
         _check_route_client_network(client_ip, route)
         if route.methods is not None and head.method not in route.methods:
-            raise MethodNotAllowed("method is not allowed for this route", rule_id="HW-METHOD-1102")
+            raise MethodNotAllowed(
+                "method is not allowed for this route",
+                rule_id="HW-METHOD-1102",
+                allow=tuple(dict.fromkeys(route.methods)),
+            )
         if route.max_body_bytes is not None and head.content_length > route.max_body_bytes:
             raise PayloadTooLarge("request body exceeds the route limit", rule_id="HW-BODY-1105")
     if (policy.read_only or (route is not None and route.read_only)) and head.method in _UNSAFE_METHODS:
@@ -406,8 +427,9 @@ _XSS_PATTERNS = [
 ]
 
 _TRAVERSAL_PATTERNS = [
-    re.compile(r"(?:^|[/\\])\.\.(?:[/\\]|$)", re.I | re.S),
-    re.compile(r"(?:^|[/\\])\.\.%2f", re.I | re.S),
+    re.compile(r"\.{2,}[\x00-\x20]*[/\\]", re.I | re.S),
+    re.compile(r"\.{2,}[\x00-\x20]*%(?:2f|5c)", re.I | re.S),
+    re.compile(r"(?:^|[^.\w])\.{2,}[\x00-\x20]*(?:[;?#]|$)", re.I | re.S),
 ]
 
 _CMDI_PATTERNS = [

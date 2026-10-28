@@ -4,7 +4,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from highwall.errors import BadRequest, Forbidden, MethodNotAllowed, PayloadTooLarge, UnsupportedMediaType
+from highwall.errors import (
+    BadRequest,
+    Forbidden,
+    MethodNotAllowed,
+    PayloadTooLarge,
+    UnsupportedMediaType,
+)
 from highwall.protocol import RequestHead
 from highwall.waf import inspect_body, inspect_texts, resolve_client_ip, validate_head
 from tests.support import base_config
@@ -289,6 +295,7 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(MethodNotAllowed) as caught:
             validate_head(self.head(method="POST", target="/api"), "127.0.0.1", config.policy)
         self.assertEqual(caught.exception.rule_id, "HW-METHOD-1102")
+        self.assertEqual(caught.exception.allow, ("GET",))
 
     def test_route_body_limit_is_enforced(self) -> None:
         config = base_config(
@@ -454,6 +461,28 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(category=category, payload=payload):
                 hit = inspect_texts([payload], [category])
                 self.assertIsNotNone(hit)
+
+    def test_traversal_in_query_and_body_values_is_blocked(self) -> None:
+        payloads = [
+            "name=../secret.txt",
+            '{"path":"../../etc/passwd"}',
+            "name=..%2fsecret.txt",
+            "name=%252e%252e%252fsecret.txt",
+            "name=....//secret.txt",
+            "name=..\\\\secret.txt",
+            "name=..",
+        ]
+        for payload in payloads:
+            with self.subTest(payload=payload):
+                hit = inspect_texts([payload], ["traversal"])
+                self.assertIsNotNone(hit, payload)
+                assert hit is not None
+                self.assertEqual(hit.rule_id, "HW-WAF-TRAVERSAL-1001")
+
+    def test_traversal_rule_ignores_benign_dots(self) -> None:
+        for value in ("q=v1.2.3", "q=hello...", "q=a..b", "q=1..5", "q=plan..revised"):
+            with self.subTest(value=value):
+                self.assertIsNone(inspect_texts([value], ["traversal"]))
 
     def test_utf16_and_nul_request_bodies_are_rejected(self) -> None:
         samples = [

@@ -13,3 +13,6 @@ certs/
 *.key
 .runtime*/
 .tls-e2e*/
+.coverage
+coverage.xml
+htmlcov/

@@ -9,11 +9,14 @@ import signal
 import sys
 import threading
 from pathlib import Path
+from typing import Any, cast
 
 from . import __version__
 from .admin import build_admin_server
-from .config_report import build_config_report
 from .config import Config, ConfigError, load_config, load_config_data
+from .config_audit import audit_config
+from .config_diff import build_config_diff
+from .config_report import build_config_report
 from .control import ServerController
 from .init_config import (
     build_initial_config,
@@ -47,6 +50,60 @@ def _check_config(config: Config) -> str:
         validate_admin_token(token)
     build_tls_context(config)
     return "configuration OK"
+
+
+def _display_value(value: object) -> str:
+    text = json.dumps(value, ensure_ascii=True, sort_keys=True)
+    return text if len(text) <= 160 else text[:157] + "..."
+
+
+def _print_config_diff(report: dict[str, Any]) -> None:
+    print(f"current: {report['current']}")
+    print(f"candidate: {report['candidate']}")
+    if not report["changed"]:
+        print("result: no effective configuration changes")
+        return
+
+    changes = report["changes"]
+    assert isinstance(changes, list)
+    print(f"result: {len(changes)} effective change(s)")
+    print("changes:")
+    for change in changes:
+        assert isinstance(change, dict)
+        change_class = "restart" if change["requires_restart"] else "reload"
+        print(
+            f"  [{change_class}] {change['path']}: "
+            f"{_display_value(change['current'])} -> {_display_value(change['candidate'])}"
+        )
+
+    regressions = report["security_regressions"]
+    assert isinstance(regressions, list)
+    if regressions:
+        print("security regressions:")
+        for finding in regressions:
+            assert isinstance(finding, dict)
+            print(f"  [{finding['severity']}] {finding['path']}: {finding['message']}")
+            print(
+                f"    {_display_value(finding['current'])} -> "
+                f"{_display_value(finding['candidate'])}"
+            )
+
+    review = report["security_review"]
+    assert isinstance(review, list)
+    if review:
+        print("security review:")
+        for finding in review:
+            assert isinstance(finding, dict)
+            print(f"  [{finding['severity']}] {finding['path']}: {finding['message']}")
+            print(
+                f"    {_display_value(finding['current'])} -> "
+                f"{_display_value(finding['candidate'])}"
+            )
+
+    if report["restart_required"]:
+        print("restart required for: " + ", ".join(str(path) for path in report["restart_required"]))
+    if regressions:
+        print("promotion blocked: candidate weakens an existing security control")
 
 
 def _serve(config: Config, config_path: Path) -> int:
@@ -87,7 +144,7 @@ def _serve(config: Config, config_path: Path) -> int:
     def request_reload(signum: int, frame: object) -> None:
         reload_event.set()
 
-    previous_handlers: dict[int, object] = {}
+    previous_handlers: dict[int, Any] = {}
     for signal_name, handler in (
         ("SIGINT", request_stop),
         ("SIGTERM", request_stop),
@@ -115,7 +172,11 @@ def _serve(config: Config, config_path: Path) -> int:
     if admin is not None:
         _LOG.info(
             "management endpoint on %s (loopback only)",
-            _endpoint("http", admin.server_address[0], admin.server_address[1]),
+            _endpoint(
+                "http",
+                cast(str, admin.server_address[0]),
+                admin.server_address[1],
+            ),
         )
     gateway_thread.start()
     if admin_thread is not None:
@@ -163,6 +224,26 @@ def _serve(config: Config, config_path: Path) -> int:
     return 0
 
 
+def _diff(args: argparse.Namespace) -> int:
+    try:
+        current = load_config(Path(args.config))
+        candidate = load_config(Path(args.candidate))
+        _check_config(candidate)
+    except ConfigError as exc:
+        print(f"configuration error: {exc}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as exc:
+        print(f"configuration error ({type(exc).__name__})", file=sys.stderr)
+        return 2
+
+    report = build_config_diff(current, candidate)
+    if args.json:
+        print(json.dumps(report, indent=2, ensure_ascii=True))
+    else:
+        _print_config_diff(report)
+    return int(report["exit_code"])
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="highwall", description="Fail-closed HTTP application firewall and reverse proxy.")
     parser.add_argument("--version", action="version", version=f"highwall {__version__}")
@@ -173,8 +254,20 @@ def build_parser() -> argparse.ArgumentParser:
     check = subparsers.add_parser("check", help="validate configuration without listening")
     check.add_argument("-c", "--config", required=True, help="path to the JSON configuration")
     check.add_argument("-v", "--verbose", action="store_true", help="enable debug logging")
+    check.add_argument(
+        "--strict",
+        action="store_true",
+        help="exit 4 when the configuration has high-risk warnings",
+    )
     inspect = subparsers.add_parser("inspect", help="print the effective configuration as JSON")
     inspect.add_argument("-c", "--config", required=True, help="path to the JSON configuration")
+    diff = subparsers.add_parser(
+        "diff",
+        help="compare current and candidate configurations, including reload and security impact",
+    )
+    diff.add_argument("-c", "--config", required=True, help="path to the current JSON configuration")
+    diff.add_argument("--candidate", required=True, help="path to the candidate JSON configuration")
+    diff.add_argument("--json", action="store_true", help="emit a machine-readable JSON report")
     init = subparsers.add_parser("init", help="write a compact deployment configuration")
     init.add_argument(
         "--base",
@@ -232,9 +325,9 @@ def _init(args: argparse.Namespace) -> int:
             allowed_hosts = tuple(args.allowed_hosts or ("app.internal",))
             methods = tuple(method.upper() for method in (args.methods or ("GET", "HEAD", "POST")))
             if args.no_honeypot:
-                presets: tuple[str, ...] = ()
+                initial_presets: tuple[str, ...] = ()
             else:
-                presets = tuple(args.honeypot_presets or ("common",))
+                initial_presets = tuple(args.honeypot_presets or ("common",))
             data = build_initial_config(
                 upstream_scheme=scheme,
                 upstream_host=host,
@@ -243,22 +336,22 @@ def _init(args: argparse.Namespace) -> int:
                 listen_port=args.listen_port if args.listen_port is not None else 18090,
                 allowed_hosts=allowed_hosts,
                 allowed_methods=methods,
-                honeypot_presets=presets,
+                honeypot_presets=initial_presets,
                 audit_path=args.audit_path or "audit.jsonl",
                 base_dir=output.parent,
             )
         else:
             if args.upstream is None:
-                scheme = host = None
-                port = None
+                upstream_scheme = upstream_host = None
+                upstream_port = None
             else:
-                scheme, host, port = parse_upstream_url(args.upstream)
+                upstream_scheme, upstream_host, upstream_port = parse_upstream_url(args.upstream)
             presets = tuple(args.honeypot_presets) if args.honeypot_presets is not None else None
             data = update_config_data(
                 base_data,
-                upstream_scheme=scheme,
-                upstream_host=host,
-                upstream_port=port,
+                upstream_scheme=upstream_scheme,
+                upstream_host=upstream_host,
+                upstream_port=upstream_port,
                 listen_host=args.listen_host,
                 listen_port=args.listen_port,
                 allowed_hosts=tuple(args.allowed_hosts) if args.allowed_hosts is not None else None,
@@ -308,6 +401,8 @@ def main(argv: list[str] | None = None) -> int:
     _configure_logging(getattr(args, "verbose", False))
     if args.command == "init":
         return _init(args)
+    if args.command == "diff":
+        return _diff(args)
     try:
         config = load_config(Path(args.config))
     except ConfigError as exc:
@@ -325,6 +420,19 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError) as exc:
             print(f"configuration error ({type(exc).__name__})", file=sys.stderr)
             return 2
+        warnings = audit_config(config)
+        for warning in warnings:
+            print(
+                f"warning [{warning.severity}] {warning.path}: {warning.message}",
+                file=sys.stderr,
+            )
+        high_risk = [warning for warning in warnings if warning.severity == "high"]
+        if args.strict and high_risk:
+            print(
+                f"strict configuration check failed: {len(high_risk)} high-risk warning(s)",
+                file=sys.stderr,
+            )
+            return 4
         return 0
     if args.command == "serve":
         try:

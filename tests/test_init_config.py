@@ -9,7 +9,11 @@ import unittest
 from pathlib import Path
 
 from highwall.config import ConfigError, load_config
-from highwall.init_config import build_initial_config, parse_upstream_url, write_initial_config
+from highwall.init_config import (
+    build_initial_config,
+    parse_upstream_url,
+    write_initial_config,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 

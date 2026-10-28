@@ -44,6 +44,16 @@ class MethodNotAllowed(HighWallError):
     code = "method_not_allowed"
     public_message = "Method not allowed."
 
+    def __init__(
+        self,
+        message: str | None = None,
+        *,
+        rule_id: str | None = None,
+        allow: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message, rule_id=rule_id)
+        self.allow = allow
+
 
 class RequestTimeout(HighWallError):
     status = 408
@@ -85,6 +95,7 @@ class TooManyRequests(HighWallError):
     status = 429
     code = "too_many_requests"
     public_message = "Too many requests."
+    retry_after = 0.0
 
 
 class BadGateway(HighWallError):
@@ -97,6 +108,7 @@ class ServiceUnavailable(HighWallError):
     status = 503
     code = "service_unavailable"
     public_message = "Service unavailable."
+    retry_after = 0.0
 
 
 class GatewayTimeout(HighWallError):

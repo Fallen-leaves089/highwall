@@ -221,6 +221,7 @@ class AuditConfig:
     backup_count: int
     include_client_ip: bool
     path_mode: str
+    on_write_failure: str
 
 
 @dataclass(frozen=True)
@@ -236,6 +237,9 @@ class AdminConfig:
 class ThreatDetectionConfig:
     enabled: bool
     mode: str
+    agent_mode: str
+    agent_min_signals: int
+    agent_score: int
     window_seconds: float
     min_requests: int
     min_distinct_paths: int
@@ -326,10 +330,10 @@ def canonicalize_host(value: str) -> str:
         if remainder:
             if not remainder.startswith(":") or not remainder[1:].isdigit():
                 raise ConfigError("invalid port in authority")
-            port = int(remainder[1:])
-            if not 1 <= port <= 65535:
+            authority_port = int(remainder[1:])
+            if not 1 <= authority_port <= 65535:
                 raise ConfigError("authority port is out of range")
-            return f"[{address}]:{port}"
+            return f"[{address}]:{authority_port}"
         return f"[{address}]"
 
     if host.count(":") > 1:
@@ -1233,17 +1237,31 @@ def _parse_rate_limit(value: Any) -> RateLimitConfig:
 
 def _parse_audit(value: Any, base_dir: Path) -> AuditConfig:
     where = "audit"
-    raw = _object(value, where, {"path", "max_bytes", "backup_count", "include_client_ip", "path_mode"})
+    raw = _object(
+        value,
+        where,
+        {"path", "max_bytes", "backup_count", "include_client_ip", "path_mode", "on_write_failure"},
+    )
     path_text = _string(raw.get("path"), f"{where}.path", "highwall-audit.jsonl", 1, 4096)
     path_mode = _string(raw.get("path_mode"), f"{where}.path_mode", "redact", 4, 6).lower()
     if path_mode not in {"exact", "redact", "hash"}:
         raise ConfigError("audit.path_mode must be exact, redact, or hash")
+    on_write_failure = _string(
+        raw.get("on_write_failure"),
+        f"{where}.on_write_failure",
+        "fail_closed",
+        8,
+        11,
+    ).lower()
+    if on_write_failure not in {"fail_closed", "continue"}:
+        raise ConfigError("audit.on_write_failure must be fail_closed or continue")
     return AuditConfig(
         path=_resolve_path(path_text, base_dir, f"{where}.path", reject_symlink=True),
         max_bytes=_int(raw.get("max_bytes"), f"{where}.max_bytes", 10 * 1024 * 1024, 1024, 1024 * 1024 * 1024),
         backup_count=_int(raw.get("backup_count"), f"{where}.backup_count", 5, 0, 50),
         include_client_ip=_bool(raw.get("include_client_ip"), f"{where}.include_client_ip", True),
         path_mode=path_mode,
+        on_write_failure=on_write_failure,
     )
 
 
@@ -1278,6 +1296,9 @@ def _parse_threat_detection(value: Any, base_dir: Path) -> ThreatDetectionConfig
         {
             "enabled",
             "mode",
+            "agent_mode",
+            "agent_min_signals",
+            "agent_score",
             "window_seconds",
             "min_requests",
             "min_distinct_paths",
@@ -1304,6 +1325,9 @@ def _parse_threat_detection(value: Any, base_dir: Path) -> ThreatDetectionConfig
     mode = _string(raw.get("mode"), f"{where}.mode", "monitor", 6, 8).lower()
     if mode not in {"monitor", "throttle", "tarpit", "block"}:
         raise ConfigError(f"{where}.mode must be monitor, throttle, tarpit, or block")
+    agent_mode = _string(raw.get("agent_mode"), f"{where}.agent_mode", "score", 5, 8).lower()
+    if agent_mode not in {"score", "block", "throttle"}:
+        raise ConfigError(f"{where}.agent_mode must be score, block, or throttle")
     score_threshold = _int(raw.get("score_threshold"), f"{where}.score_threshold", 70, 1, 100)
     confirm_score = _int(raw.get("confirm_score"), f"{where}.confirm_score", 85, 1, 100)
     if confirm_score < score_threshold:
@@ -1339,6 +1363,9 @@ def _parse_threat_detection(value: Any, base_dir: Path) -> ThreatDetectionConfig
     return ThreatDetectionConfig(
         enabled=enabled,
         mode=mode,
+        agent_mode=agent_mode,
+        agent_min_signals=_int(raw.get("agent_min_signals"), f"{where}.agent_min_signals", 3, 1, 6),
+        agent_score=_int(raw.get("agent_score"), f"{where}.agent_score", 30, 0, 100),
         window_seconds=_number(raw.get("window_seconds"), f"{where}.window_seconds", 10.0, 1.0, 3600.0),
         min_requests=_int(raw.get("min_requests"), f"{where}.min_requests", 10, 1, 100000),
         min_distinct_paths=_int(raw.get("min_distinct_paths"), f"{where}.min_distinct_paths", 6, 1, 10000),

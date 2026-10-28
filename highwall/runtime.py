@@ -100,6 +100,10 @@ class Runtime:
         circuit_breaker: CircuitBreaker | None = None
         honeypot_ban: AdaptiveBanner | None = None
         route_limiters: dict[str, TokenBucketLimiter] = {}
+        needs_agent_ip_ban = (
+            config.threat_detection.enabled
+            and config.threat_detection.agent_mode == "block"
+        )
         reuse_rate_state = (
             previous is not None
             and config.rate_limit == previous.config.rate_limit
@@ -125,13 +129,6 @@ class Runtime:
                     max_entries=1,
                     idle_ttl=config.rate_limit.client_idle_ttl,
                 )
-                if config.rate_limit.auto_ban_threshold > 0:
-                    auto_ban = AdaptiveBanner(
-                        config.rate_limit.auto_ban_threshold,
-                        config.rate_limit.auto_ban_window,
-                        config.rate_limit.auto_ban_seconds,
-                        max_entries=config.rate_limit.max_ban_entries,
-                    )
             for route in config.policy.routes:
                 if route.rate > 0:
                     route_limiters[route.path_prefix] = TokenBucketLimiter(
@@ -140,6 +137,19 @@ class Runtime:
                         max_entries=config.rate_limit.max_tracked_clients,
                         idle_ttl=config.rate_limit.client_idle_ttl,
                     )
+        auto_ban_enabled = (
+            config.rate_limit.enabled
+            and config.rate_limit.auto_ban_threshold > 0
+        ) or needs_agent_ip_ban
+        if auto_ban_enabled and auto_ban is None:
+            auto_ban = AdaptiveBanner(
+                max(1, config.rate_limit.auto_ban_threshold),
+                config.rate_limit.auto_ban_window,
+                config.rate_limit.auto_ban_seconds,
+                max_entries=config.rate_limit.max_ban_entries,
+            )
+        elif not auto_ban_enabled:
+            auto_ban = None
         same_upstream_target = (
             previous is not None
             and config.upstream.scheme == previous.config.upstream.scheme

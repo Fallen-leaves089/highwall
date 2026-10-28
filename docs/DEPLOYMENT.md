@@ -39,6 +39,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1
 - 要修改已有实例，先 `-Stop`，再显式使用 `-Reconfigure`；脚本只合并命令行显式传入的参数，未指定的路由、TLS、超时、限流、扫描模式和安全头保持原值，旧配置自动备份为 `config.json.bak.<时间戳>`。
 - 手工局部修改使用 `python -m highwall init --base config.json --output config.json --force --listen-port 18091`；`--base` 模式只修改显式字段，并在写盘前验证合并结果。若配置包含相对审计或 TLS 路径，输出到另一个目录会被拒绝，避免相对路径悄悄指向新位置。
 - `highwall inspect` 输出的是解析、默认值和蜜罐预设展开后的生效值，不是原始文件回显，包含 TLS、超时、路由、WAF、响应扫描、安全头、限流和管理面参数。用它核对“写了但没生效”的情况。
+- 配置晋级前运行 `highwall diff -c config.json --candidate config.next.json`：`0` 表示无生效变化，`1` 表示只需热加载，`3` 表示必须重启，`4` 表示检测到安全降级。候选配置会先经过完整校验；`security_review` 中的上游、管理面或审计路径变化仍需人工确认。
 - `--force` 是原子替换配置文件；Windows ACL 可能随新文件继承父目录权限。生产环境替换后应重新核对服务账户 ACL；可热改字段通过 `/reload` 生效，监听地址/端口、`max_connections`、`max_inflight_requests` 或 TLS 启用状态变更仍需重启。
 - HighWall 支持原子配置重载：POSIX 发送 `SIGHUP`，或调用管理面 `POST /reload`。重载失败会保留旧配置；监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态和管理面监听仍需重启。`quickstart.ps1 -Status` 仍会比较启动时记录的 SHA-256 与当前文件，并在发现变化时提示重启，这是实验脚本的保守行为，不代表进程不能热加载。
 
@@ -46,10 +47,11 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1
 
 ```powershell
 python -m highwall check -c C:\ProgramData\HighWall\config.json
+python -m highwall diff -c C:\ProgramData\HighWall\config.json --candidate C:\ProgramData\HighWall\config.next.json
 curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127.0.0.1:18091/reload
 ```
 
-- 先在同一个服务环境里确认新配置能通过 `check`，再调用 `/reload`；返回 `{"status":"reloaded","generation":N}` 表示已切换。
+- 先在同一个服务环境里确认新配置能通过 `check`，并用 `diff` 确认没有必须重启或阻断晋级的安全降级，再调用 `/reload`；返回 `{"status":"reloaded","generation":N}` 表示已切换。
 - 失败返回 `{"status":"rejected","error":"..."}`，旧配置继续服务；检查日志和 `config_reload_failures_total`。
 - 证书轮换可替换文件内容或路径后重载；新握手使用新证书，旧连接保持旧上下文直到结束。轮换后用新连接验证证书链和主机名。
 - 需要修改监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态或管理面监听时，使用滚动重启。
@@ -110,6 +112,7 @@ python -m highwall init `
 - `policy.allow_path_parameters` 和 `policy.allow_trailing_dot_or_space` 默认 `false`。只有上游确实依赖这类路径且已逐项验证路由、只读、完整性和 WAF 边界时才允许打开。
 - `policy.allowed_client_networks` 按真实入口网段收窄；`denied_client_networks` 用于明确排除的网段，拒绝优先；不要配置 `0.0.0.0/0` 或 `::/0`；
 - `policy.allowed_origins` 填浏览器实际使用的 scheme + authority；配置后写请求必须带匹配的 Origin，curl/API 客户端要么绕过该入口，要么显式提供来源；
+- 浏览器跨域写请求会先发 `OPTIONS` 预检；默认 `allowed_methods` 不含 `OPTIONS`，启用 `allowed_origins` 时要显式加入 `OPTIONS`，并确认上游能正确响应预检，否则浏览器会拿到 405；
 - `policy.read_only` 适合纯静态或只读窗口；对 `/admin`、`/backup`、删除/审批等前缀优先使用 `routes[].read_only`、方法子集和来源 CIDR，而不是全局关闭写能力；
 - 路由必须是全局 `allowed_methods` 的子集；`routes[].allowed_client_networks` 为空是配置错误，不会被静默解释为“不限制”；`max_concurrent=0` 才是关闭路由槽位；`rate=0` 才是关闭路由限速，`rate_burst` 不能单独设置；
 - `read_only` 只按方法阻断写请求，不会识别 GET 副作用；有破坏性的 GET 接口必须在上游修正或从入口移除；
@@ -122,8 +125,8 @@ python -m highwall init `
 - `server.max_inflight_requests` 设置全局在途上限，建议小于 `max_connections`，否则不会形成额外背压；超限返回 503；
 - `upstream.circuit_breaker` 的 `failure_threshold`、`window`、`open_seconds` 和 `half_open_max_requests` 按上游容量和恢复时间调整；熔断期间会主动返回 503；
 - `server.max_connections_per_ip` 约束单来源并发；反向代理/LB 来源若在 `trusted_proxies` 中则不按 TCP 来源计数；
-- `rate_limit.auto_ban_threshold` 设为 `0` 可关闭临时封禁；启用时按 NAT/共享出口规模调整阈值、窗口和封禁时长；
-- `threat_detection` 默认关闭。先以 `mode=monitor` 观察 `threat_suspected` / `threat_confirmed`，再启用 `tarpit`；默认 `containment_seconds=300` 是疑似限速窗口，`confirmed_containment_seconds=900` 是确认后的慢速窗口。`per_actor_tarpit_slots` 和 `global_tarpit_slots` 要与线程、连接数和业务容量匹配；
+- `rate_limit.auto_ban_threshold` 设为 `0` 可关闭“错误累计”自动封禁；它不会关闭 `threat_detection.agent_mode=block` 的定向封禁。启用时按 NAT/共享出口规模调整阈值、窗口和封禁时长；
+- `threat_detection` 默认关闭。先以 `mode=monitor` 观察 `threat_suspected` / `threat_confirmed`，再启用 `tarpit`；默认 `containment_seconds=300` 是疑似限速窗口，`confirmed_containment_seconds=900` 是确认后的慢速窗口。`per_actor_tarpit_slots` 和 `global_tarpit_slots` 要与线程、连接数和业务容量匹配；`agent_mode=block` 按来源 IP 封禁，`throttle` 只限制当前指纹/请求形状，轮换 UA 可能重新获得干净配额；
 - `threat_detection.offender_path` 指向受 ACL 保护的可写数据目录，例如 `C:\ProgramData\HighWall\data\offenders.json`；不要放在只读程序目录、WSL 可写目录或与审计日志相同的公开目录。标记有 TTL 和容量上限，不是永久封禁源；
 - `ddos_detection` 默认关闭。启用后聚合 L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误；默认需要至少 2 类信号，持续 300 秒升级告警，无信号 30 秒恢复。它不识别 L3/L4 来源，也不做带宽清洗；
 - `alerting` 默认关闭。启用时必须通过 `HIGHWALL_ALERT_WEBHOOK` 提供 HTTPS URL，可选 `HIGHWALL_ALERT_TOKEN`；不要把 token 写进配置或命令行。`include_client_ip=false` 是推荐默认值，`allow_http=false` 不应在生产打开；
@@ -136,9 +139,12 @@ python -m highwall init `
 ```powershell
 cd 'C:\Program Files\HighWall'
 python -m highwall check -c 'C:\ProgramData\HighWall\config.json'
+python -m highwall check -c 'C:\ProgramData\HighWall\config.json' --strict
 ```
 
-`check` 不应修改防火墙、创建监听器或启动上游。
+`check` 不应修改防火墙、创建监听器或启动上游。`--strict` 在存在 `high` 级高危告警时返回 `4`，适合接入企业 CI 或变更门禁；`medium` 级告警仍只提示，不阻断晋级。
+
+高危告警包括：`policy.trusted_proxies` 非空、打开 `allow_path_parameters` 或 `allow_trailing_dot_or_space`、关闭 `reject_encoded_separators` 或 `reject_duplicate_headers`、关闭 `waf_enabled`、配置了 `integrity_pins` 但 `response_integrity_mode=off`、`audit.on_write_failure` 不是 `fail_closed`。`trusted_proxies`、`allowed_origins`、路由/全局来源 CIDR 和路径兼容开关都应按最小范围配置，并在变更后重新验证。
 
 再核对展开后的实际生效值：
 
@@ -393,6 +399,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 ## 10. 验收清单
 
 - [ ] `python -m highwall check` 通过。
+- [ ] 企业 CI/变更门禁执行 `python -m highwall check --strict`，没有 `high` 级高危告警；`medium` 告警已逐项评估。
 - [ ] 只绑定回环时，正常请求能到达上游。
 - [ ] 非允许 Host、方法、路径、Content-Type 被拒绝。
 - [ ] 分号路径参数、尾随点/空格和编码分隔符在默认配置下被拒绝；打开兼容开关后的行为已单独测试。
@@ -404,6 +411,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 - [ ] 上游连续 5xx/超时后熔断打开并返回 503；恢复探针成功后状态回到 closed。
 - [ ] `server.max_inflight_requests` 超限返回 503，而不是无限排队。
 - [ ] `POST /reload` 在配置有语法错误或监听字段变化时返回 `rejected`，旧配置继续服务；成功时 `generation` 增加。
+- [ ] 晋级前 `highwall diff` 的退出码符合预期：无变化为 `0`，仅热加载为 `1`，需重启为 `3`，安全降级为 `4`；`security_review` 项已人工确认。
 - [ ] 证书轮换后新连接使用新证书，旧连接不被强制中断；排空期间新连接返回 503，在途请求在 `shutdown_timeout` 内完成。
 - [ ] 上游返回私钥或调试栈时，DLP 的 `block` 模式返回 502 且不把原文转发给客户端；`detect` 模式只记录。
 - [ ] UTF-16 BOM、NUL body 和非 UTF-8/ASCII 声明 charset 被拒绝；DLP 能覆盖响应头、二进制响应体和 UTF-16 响应，并正确跳过 `Set-Cookie`。

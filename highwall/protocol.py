@@ -9,12 +9,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import BinaryIO
+from typing import Protocol
 
 from .config import PolicyConfig
 from .errors import (
     BadRequest,
     ExpectationFailed,
+    HighWallError,
     PayloadTooLarge,
     RequestHeaderFieldsTooLarge,
     URITooLong,
@@ -22,6 +23,12 @@ from .errors import (
 
 _METHOD_RE = re.compile(r"^[A-Z]{1,16}$")
 _ALLOWED_VERSIONS = {b"HTTP/1.0", b"HTTP/1.1"}
+
+
+class RequestReader(Protocol):
+    def readline(self, limit: int) -> bytes: ...
+
+    def read(self, length: int) -> bytes: ...
 
 
 @dataclass(frozen=True)
@@ -34,7 +41,7 @@ class RequestHead:
     client_ip: str
 
 
-def _read_crlf_line(reader: BinaryIO, limit: int, too_long_error: type[Exception]) -> bytes | None:
+def _read_crlf_line(reader: RequestReader, limit: int, too_long_error: type[HighWallError]) -> bytes | None:
     line = reader.readline(limit + 1)
     if not line:
         return None
@@ -64,7 +71,7 @@ def _parse_content_length(values: list[str]) -> int:
     return length
 
 
-def read_request_head(reader: BinaryIO, client_ip: str, policy: PolicyConfig) -> RequestHead | None:
+def read_request_head(reader: RequestReader, client_ip: str, policy: PolicyConfig) -> RequestHead | None:
     """Read and validate a request head without reading the body."""
 
     raw_line = _read_crlf_line(reader, policy.max_request_line, URITooLong)
@@ -148,7 +155,7 @@ def read_request_head(reader: BinaryIO, client_ip: str, policy: PolicyConfig) ->
     )
 
 
-def read_request_body(reader: BinaryIO, head: RequestHead) -> bytes:
+def read_request_body(reader: RequestReader, head: RequestHead) -> bytes:
     if head.content_length == 0:
         return b""
     body = reader.read(head.content_length)
@@ -157,7 +164,7 @@ def read_request_body(reader: BinaryIO, head: RequestHead) -> bytes:
     return body
 
 
-def discard_request_body(reader: BinaryIO, head: RequestHead, chunk_size: int = 65536) -> int:
+def discard_request_body(reader: RequestReader, head: RequestHead, chunk_size: int = 65536) -> int:
     """Drain a declared body without retaining it, returning the byte count."""
 
     remaining = head.content_length

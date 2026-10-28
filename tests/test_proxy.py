@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import socket
 import tempfile
 import threading
@@ -249,6 +249,12 @@ class ProxyIntegrationTests(unittest.TestCase):
         status, _, _ = self.request(build_request(method="PUT"))
         self.assertEqual(status, 405)
 
+    def test_disallowed_method_reports_allowed_methods(self) -> None:
+        status, headers, _ = self.request(build_request(method="PUT"))
+        self.assertEqual(status, 405)
+        values = {name.lower(): value for name, value in headers}
+        self.assertEqual(values.get("allow"), "GET, HEAD, POST")
+
     def test_absolute_uri_rejected(self) -> None:
         raw = b"GET http://evil.local/ HTTP/1.1\r\nHost: test.local\r\n\r\n"
         status, _, _ = self.request(raw)
@@ -260,9 +266,25 @@ class ProxyIntegrationTests(unittest.TestCase):
                 status, _, _ = self.request(build_request(path=path))
                 self.assertIn(status, {400, 403})
 
+    def test_query_traversal_rejected(self) -> None:
+        for path in (
+            "/echo?q=../secret.txt",
+            "/echo?q=%2e%2e%2fsecret.txt",
+            "/echo?q=%252e%252e%252fsecret.txt",
+            "/echo?q=....//secret.txt",
+        ):
+            with self.subTest(path=path):
+                status, _, _ = self.request(build_request(path=path))
+                self.assertEqual(status, 403)
+
     def test_denied_path_rejected(self) -> None:
         status, _, _ = self.request(build_request(path="/.git/config"))
         self.assertEqual(status, 403)
+
+    def test_audit_unavailable_fails_closed(self) -> None:
+        self.gateway.runtime.audit.unavailable = True
+        status, _, _ = self.request(build_request(path="/ok"))
+        self.assertEqual(status, 503)
 
     def test_oversized_body_rejected_before_read(self) -> None:
         raw = (
@@ -584,6 +606,8 @@ class ProxyIntegrationTests(unittest.TestCase):
                         self.assertEqual(status, 400)
                 upper = parse_response(send_raw(gateway.port, build_request(method="POST", path="/ADMIN")))
         self.assertEqual(upper[0], 405)
+        upper_headers = {name.lower(): value for name, value in upper[1]}
+        self.assertEqual(upper_headers.get("allow"), "GET")
         self.assertEqual(self.stub.state.snapshot(), [])
 
     def test_integrity_pin_uses_routing_path_after_compatibility_normalization(self) -> None:
@@ -701,6 +725,52 @@ class ProxyIntegrationTests(unittest.TestCase):
         self.assertEqual(second[0], 403)
         self.assertEqual(third[0], 429)
         self.assertTrue(header_values(third[1], "Retry-After"))
+        self.assertEqual(event["rule_id"], "HW-RATE-1003")
+
+    def test_agent_block_mode_bans_source_without_rate_limiter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            config = base_config(
+                Path(directory),
+                self.stub.port,
+                overrides={
+                    "threat_detection": {
+                        "enabled": True,
+                        "agent_mode": "block",
+                        "agent_min_signals": 3,
+                        "offender_path": "offenders.json",
+                    },
+                    "rate_limit": {
+                        "enabled": False,
+                        "auto_ban_threshold": 0,
+                    },
+                },
+            )
+            with GatewayHarness(config) as gateway:
+                blocked = None
+                for index in range(6):
+                    blocked = parse_response(
+                        send_raw(
+                            gateway.port,
+                            build_request(
+                                path=f"/scan?id={index}",
+                                headers=[("User-Agent", "python-requests/2.32.0")],
+                            ),
+                        )
+                    )
+                followed = parse_response(
+                    send_raw(
+                        gateway.port,
+                        build_request(
+                            path="/page",
+                            headers=[("User-Agent", "Mozilla/5.0")],
+                        ),
+                    )
+                )
+            event = json.loads((Path(directory) / "audit.jsonl").read_text("utf-8").splitlines()[-1])
+        assert blocked is not None
+        self.assertEqual(blocked[0], 429)
+        self.assertTrue(header_values(blocked[1], "Retry-After"))
+        self.assertEqual(followed[0], 429)
         self.assertEqual(event["rule_id"], "HW-RATE-1003")
 
     def test_tls_profile_reaches_threat_detector(self) -> None:
