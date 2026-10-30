@@ -392,17 +392,17 @@ def _global_findings(
             )
         )
 
-    old_trusted = _list_value(before, "policy.trusted_proxies")
-    new_trusted = _list_value(after, "policy.trusted_proxies")
-    added_trusted = _added(old_trusted, new_trusted)
-    if added_trusted:
+    old_proxy = _list_value(before, "policy.trusted_proxies")
+    new_proxy = _list_value(after, "policy.trusted_proxies")
+    added_proxy = _added(old_proxy, new_proxy)
+    if added_proxy:
         regressions.append(
             _finding(
                 "policy.trusted_proxies",
                 "high",
-                "trusted proxy networks were added: " + ", ".join(str(item) for item in added_trusted),
-                old_trusted,
-                new_trusted,
+                "trusted proxy networks were added: " + ", ".join(str(item) for item in added_proxy),
+                old_proxy,
+                new_proxy,
             )
         )
 

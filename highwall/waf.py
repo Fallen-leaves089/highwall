@@ -78,7 +78,7 @@ def normalize_ip(value: str) -> str:
 
 
 def _is_trusted(address: ipaddress.IPv4Address | ipaddress.IPv6Address, policy: PolicyConfig) -> bool:
-    return any(address in network for network in policy.trusted_proxies)
+    return any(address in network for network in policy.proxy_networks)
 
 
 def _check_client_network(client_ip: str, policy: PolicyConfig) -> None:

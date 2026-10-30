@@ -170,7 +170,7 @@ class PolicyConfig:
     allowed_methods: tuple[str, ...]
     allowed_path_prefixes: tuple[str, ...]
     deny_path_prefixes: tuple[str, ...]
-    trusted_proxies: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
+    proxy_networks: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
     allowed_client_networks: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
     denied_client_networks: tuple[ipaddress.IPv4Network | ipaddress.IPv6Network, ...]
     allowed_origins: tuple[str, ...]
@@ -1061,16 +1061,16 @@ def _parse_policy(value: Any) -> PolicyConfig:
     )
     deny_prefixes = tuple(_parse_prefix(prefix, "policy.deny_path_prefixes") for prefix in deny_raw)
 
-    trusted_raw = _string_list(raw.get("trusted_proxies"), "policy.trusted_proxies", [], allow_empty=True, high=64)
-    trusted: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
-    for item in trusted_raw:
+    proxy_raw = _string_list(raw.get("trusted_proxies"), "policy.trusted_proxies", [], allow_empty=True, high=64)
+    proxy_networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in proxy_raw:
         try:
             network = ipaddress.ip_network(item, strict=False)
         except ValueError as exc:
             raise ConfigError("policy.trusted_proxies contains an invalid network") from exc
         if network.prefixlen == 0:
             raise ConfigError("policy.trusted_proxies must not trust the entire internet")
-        trusted.append(network)
+        proxy_networks.append(network)
 
     allowed_client_networks = _parse_network_list(
         raw.get("allowed_client_networks"),
@@ -1156,7 +1156,7 @@ def _parse_policy(value: Any) -> PolicyConfig:
         allowed_methods=methods,
         allowed_path_prefixes=allowed_prefixes,
         deny_path_prefixes=deny_prefixes,
-        trusted_proxies=tuple(trusted),
+        proxy_networks=tuple(proxy_networks),
         allowed_client_networks=allowed_client_networks,
         denied_client_networks=denied_client_networks,
         allowed_origins=allowed_origins,

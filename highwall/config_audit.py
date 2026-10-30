@@ -32,7 +32,7 @@ def audit_config(config: Config) -> tuple[ConfigWarning, ...]:
         warnings.append(ConfigWarning(path, severity, message))
 
     policy = config.policy
-    if policy.trusted_proxies:
+    if policy.proxy_networks:
         add(
             "policy.trusted_proxies",
             "high",
