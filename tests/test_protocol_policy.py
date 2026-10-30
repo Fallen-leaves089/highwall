@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -451,6 +452,7 @@ class PolicyTests(unittest.TestCase):
     def test_confirmed_waf_bypass_payloads_are_now_blocked(self) -> None:
         payloads = [
             ("sqli", "UNION/**/SELECT password FROM users"),
+            ("sqli", "UNION/*a*b*/SELECT password FROM users"),
             ("cmdi", "; cat /etc/passwd"),
             ("xss", "onpointerover=alert(1)"),
             ("ssrf", "http://2130706433/"),
@@ -461,6 +463,12 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(category=category, payload=payload):
                 hit = inspect_texts([payload], [category])
                 self.assertIsNotNone(hit)
+
+    def test_sqli_comment_pattern_stays_linear_on_adversarial_input(self) -> None:
+        payload = "union" + " /*//*" * 28 + " x"
+        started = time.perf_counter()
+        self.assertIsNone(inspect_texts([payload], ["sqli"]))
+        self.assertLess(time.perf_counter() - started, 2.0)
 
     def test_traversal_in_query_and_body_values_is_blocked(self) -> None:
         payloads = [

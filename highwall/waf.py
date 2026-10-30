@@ -401,7 +401,10 @@ def _normalize_for_scan(value: str) -> str:
 _SQLI_PATTERNS = [
     re.compile(r"(?:'|\"|`)\s*(?:or|and)\s+(?:['\"]?\w+['\"]?|\d+)\s*(?:=|like)\s*(?:['\"]?\w+['\"]?|\d+)", re.I | re.S),
     re.compile(r"\bunion\s+(?:all\s+)?select\b", re.I | re.S),
-    re.compile(r"\bunion(?:\s|/\*.*?\*/)+(?:all(?:\s|/\*.*?\*/)+)?select\b", re.I | re.S),
+    re.compile(
+        r"\bunion(?:\s|/\*(?:[^*]|\*(?!/))*\*/)+(?:all(?:\s|/\*(?:[^*]|\*(?!/))*\*/)+)?select\b",
+        re.I | re.S,
+    ),
     re.compile(r"/\*!\d*\s*(?:union|select|or|and)\b", re.I | re.S),
     re.compile(r"\b(?:sleep|benchmark|pg_sleep)\s*\(", re.I | re.S),
     re.compile(r"\binformation_schema\b", re.I | re.S),
