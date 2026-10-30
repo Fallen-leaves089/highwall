@@ -6,9 +6,9 @@ English | [简体中文](README.md)
 
 HighWall is a **fail-closed HTTP/1.1 application-layer reverse proxy and security gateway**. It uses only the Python standard library and aims to turn the parsing, policy, resource-limit, and audit decisions most prone to ambiguity at an application entry point into a small, auditable core.
 
-Current source and latest published version: `0.10.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 added atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics; v0.10 adds `highwall diff` preflight, CI lint/type/coverage gates, CodeQL, Dependabot, signed/attested release images, and tighter path-traversal detection in query parameters and JSON bodies (including multi-encoding). It is still not a production-grade product that has completed an independent third-party audit.
+Current source and latest published version: `0.11.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 added atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics; v0.10 added `highwall diff` preflight, CI lint/type/coverage gates, CodeQL, Dependabot, and signed/attested release images; v0.11 adds the standalone L4Wall connection-level protection subproject, a standard composite deployment skeleton, a reproducible live attack range, and tighter in-flight 503 auditing and release redaction checks. It is still not a production-grade product that has completed an independent third-party audit.
 
-> **v0.10 focus**: use `highwall diff` before promotion to distinguish reloadable changes, restart requirements, and security regressions; CI and release images now have reproducible static checks, provenance, and signatures. See [Configuration reload and graceful drain](#configuration-reload-and-graceful-drain).
+> **v0.11 focus**: L4Wall handles connection admission, rate limits, byte caps, and bans, while HighWall continues to handle HTTP/1.1 WAF/DLP. Deploy with the `lite` chain or the `standard` skeleton, and verify ingress ownership, direct-access blocking, and trusted client IPs using [docs/STACK.md](docs/STACK.md) before go-live.
 
 ## Contents
 
@@ -38,7 +38,7 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 - Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
 - Composite deployment: this repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject. See [docs/STACK.md](docs/STACK.md) for the standard topology, bypass rules, and verification.
 
-> HighWall is still at `0.10.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+> HighWall is still at `0.11.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
 > **Protection boundary**: WAF signatures, DLP, behavior scoring, and honeypots are heuristics that reduce exposure. They are not an authentication or security boundary; they cannot distinguish a compromised same-host or same-namespace client, and DLP must not be sold as a leak-prevention guarantee.
 
@@ -337,10 +337,10 @@ The admin plane is a separate loopback HTTP listener and cannot be reached from 
 
 Requirements: Windows PowerShell 5.1 or newer and Python 3.10 or newer. There are no third-party dependencies.
 
-If you do not want a source checkout, download the wheel/sdist and `SHA256SUMS` from the [v0.10.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.10.0), verify them, and install:
+If you do not want a source checkout, download the wheel/sdist and `SHA256SUMS` from the [v0.11.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0), verify them, and install:
 
 ```bash
-python -m pip install highwall-0.10.0-py3-none-any.whl
+python -m pip install highwall-0.11.0-py3-none-any.whl
 ```
 
 ```powershell
@@ -405,10 +405,10 @@ The admin token is read only from the environment. Do not put it in `config.json
 
 ## Container image
 
-Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.10.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.10.0). The `0.10.0` image is published from the tag with a cosign signature and GitHub provenance attestation; the earlier `0.9.0` image does not have these attestations and must not be described as signed.
+Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.11.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0). The `0.11.0` image is published from the tag with a cosign signature and GitHub provenance attestation; the earlier `0.9.0` image does not have these attestations and must not be described as signed.
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.10.0
+docker pull ghcr.io/fallen-leaves089/highwall:0.11.0
 ```
 
 The image runs as non-root UID `10001` and starts `python -m highwall serve -c /etc/highwall/config.json` by default. No configuration is baked into the image. Without a mounted configuration, startup fails closed instead of falling back to an open policy.
@@ -435,7 +435,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.10.0
+  ghcr.io/fallen-leaves089/highwall:0.11.0
 ```
 
 - For TLS in production, mount the certificate and private key read-only and reference their in-container paths from the configuration.
@@ -444,10 +444,10 @@ docker run --rm --name highwall \
 - Images published from `v0.10.0` onward can be verified with the following commands; replace the version with the exact immutable tag you deploy:
 
 ```bash
-gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.10.0 \
+gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.11.0 \
   --repo Fallen-leaves089/highwall
 
-cosign verify ghcr.io/fallen-leaves089/highwall:0.10.0 \
+cosign verify ghcr.io/fallen-leaves089/highwall:0.11.0 \
   --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```

@@ -287,7 +287,7 @@ python -m l4wall check --config config.example.json
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| L4Wall lite | 已实现 | 64 个测试、演示、配置校验通过 |
+| L4Wall lite | 已实现 | 65 个测试、演示、配置校验通过 |
 | L4+L7 回环攻防验收 | 已实现 | 26 项端到端测试；真实 TCP 串联 L4Wall/HighWall/模拟上游 |
 | 标准拓扑攻防验收 | 未验证 | Docker daemon 不可用；未做容器、HAProxy、TLS、HTTP/2、WebSocket |
 | L4Wall 子项目迁移 | 已完成 | `subprojects/l4wall` |
