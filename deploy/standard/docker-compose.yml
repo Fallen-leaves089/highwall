@@ -1,0 +1,81 @@
+name: highwall-standard
+
+services:
+  haproxy:
+    image: haproxy:2.9-alpine
+    container_name: highwall-standard-edge
+    depends_on:
+      - highwall
+    ports:
+      - "${EDGE_HTTP_PORT:-8080}:8080"
+    volumes:
+      - ${HAPROXY_CONFIG:-./haproxy/haproxy.cfg}:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./certs:/usr/local/etc/haproxy/certs:ro
+    networks:
+      edge:
+        ipv4_address: 172.30.0.10
+    restart: unless-stopped
+    tmpfs:
+      - /var/run/haproxy
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  highwall:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: highwall-standard-l7
+    command: ["serve", "-c", "/etc/highwall/config.json"]
+    volumes:
+      - ./highwall/config.json:/etc/highwall/config.json:ro
+      - highwall-data:/var/lib/highwall
+    networks:
+      edge:
+        ipv4_address: 172.30.0.20
+      backend:
+        ipv4_address: 172.31.0.20
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+  upstream:
+    image: python:3.12-alpine
+    container_name: highwall-standard-upstream
+    command: ["python", "/app/echo.py"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - ./upstream/echo.py:/app/echo.py:ro
+    networks:
+      backend:
+        ipv4_address: 172.31.0.30
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  edge:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+  backend:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+
+volumes:
+  highwall-data:

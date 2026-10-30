@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+audit.jsonl
+audit.jsonl.*
+offenders.json
+config.json
+.runtime*/
+.demo*/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+

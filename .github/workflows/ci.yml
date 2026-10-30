@@ -30,7 +30,7 @@ jobs:
       - name: Install development tools
         run: python -m pip install --disable-pip-version-check -e ".[dev]"
       - name: Compile
-        run: python -m compileall -q highwall scripts tests
+        run: python -m compileall -q highwall scripts tests subprojects/l4wall/l4wall subprojects/l4wall/tests subprojects/l4wall/scripts deploy/standard/verify.py deploy/standard/upstream/echo.py
       - name: Lint
         run: python -m ruff check highwall scripts tests
       - name: Type check
@@ -42,6 +42,21 @@ jobs:
           python -m coverage erase
           python -m coverage run --branch -m unittest discover -s tests -v
           python -m coverage report
+      - name: Attack/defense chain acceptance
+        run: python -m unittest tests.test_attack_defense -v
+      - name: L4Wall tests
+        working-directory: subprojects/l4wall
+        run: python -m unittest discover -s tests -v
+      - name: L4Wall static checks
+        working-directory: subprojects/l4wall
+        run: |
+          python -m ruff check l4wall tests scripts
+          python -m mypy l4wall
+          python -m l4wall check --config config.example.json
+      - name: Validate standard deployment examples
+        run: |
+          python -m highwall check -c deploy/standard/highwall/config.json
+          python -m py_compile deploy/standard/verify.py deploy/standard/upstream/echo.py
       - name: Validate example configuration
         run: python -m highwall check -c config.example.json
       - name: Reject high-risk example configuration changes

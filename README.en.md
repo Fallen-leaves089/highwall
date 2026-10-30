@@ -18,6 +18,7 @@ Current source and latest published version: `0.10.0`. v0.3 expanded the protect
 - [Attacker fingerprints, marks, and slowdown](#attacker-fingerprints-marks-and-slowdown)
 - [L7 DDoS alerts and the 5-minute response window](#l7-ddos-alerts-and-the-5-minute-response-window)
 - [Enabling threat protection](#enabling-threat-protection)
+- [L4Wall subproject and composite deployment](#l4wall-subproject-and-composite-deployment)
 - [Quick start](#quick-start)
 - [Configuration highlights](#configuration-highlights)
 - [Configuration comparison](#configuration-comparison)
@@ -35,6 +36,7 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 
 - Good fit: internal services, static sites, admin surfaces, and small APIs that need an extra ingress layer.
 - Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
+- Composite deployment: this repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject. See [docs/STACK.md](docs/STACK.md) for the standard topology, bypass rules, and verification.
 
 > HighWall is still at `0.10.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
@@ -296,6 +298,17 @@ HighWall is an L7 gateway, not an “absolute” defense:
 - It does not add login, MFA, or authorization capabilities to the upstream. The upstream's own session security still matters.
 - It does not manage certificates automatically. TLS certificates and private keys must be supplied and protected by the deployer.
 
+## L4Wall subproject and composite deployment
+
+This repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject. L4Wall handles connection-level admission, rate limits, timeouts, behavior scoring, bans, and audit; HighWall continues to handle HTTP/1.1 WAF, DLP, and L7 policy. They are separate processes and do not replace each other.
+
+Two profiles are supported:
+
+- `lite`: `client -> L4Wall -> HighWall -> upstream` for single-host, small, and Windows deployments.
+- `standard`: `client -> HAProxy/Envoy -> HighWall -> upstream`; the edge proxy handles TLS, HTTP/2, WebSocket, and trusted client-IP sanitization, while L4Wall acts as the connection-level control plane. See [`deploy/standard/`](deploy/standard/README.md).
+
+Read [docs/STACK.md](docs/STACK.md) before deployment. L4Wall now includes an optional fail-isolated Redis shared-ban reader; automatic publishing, the controller, and multi-node HA are later milestones, so the standard skeleton is not a complete control plane yet.
+
 ## Architecture
 
 ```text
@@ -525,7 +538,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 1. Bind to loopback for acceptance testing first, then bind the business interface. Do not expose it directly to the public internet.
 2. Run under a dedicated low-privilege account and separate ACLs for configuration, audit, certificate directories, and the runtime account.
-3. Do not start a production instance from a WSL-writable directory, a Codex workspace, or any directory writable by an attacker.
+3. Do not start a production instance from a WSL-writable directory, a shared development workspace, or any directory writable by an attacker.
 4. Keep the upstream on loopback or a private network and use a host firewall to restrict gateway-to-upstream and operations-to-admin traffic.
 5. Enable TLS in production and grant private-key access only to the service account. Do not expose a self-signed certificate to external users.
 6. Preserve existing network isolation and user/namespace separation. HighWall cannot replace operating-system boundaries.
@@ -581,6 +594,8 @@ python -m scripts.benchmark_proxy --json
 It measures direct-upstream, HighWall-allowed, and WAF-blocked requests and reports p50/p95/p99 plus throughput. Results depend on host load, audit writes, DLP/WAF rules, and the Python version. Treat them as a same-host regression baseline, not a capacity SLA or procurement commitment.
 
 The current suite covers strict parsing, path-parameter and trailing-dot bypasses, case-variant route bypasses, request encoding, a WAF bypass matrix, DLP (binary, UTF-16, response headers, and `Set-Cookie` false positives), route rate limits, HSTS, audit redaction, route policies, read-only mode, response pinning, the circuit-breaker state machine, in-flight and route-concurrency backpressure, custom honeypots, first-hit bans, attacker fingerprints/marks/slow slots, the DDoS state machine, alert deduplication and queue backpressure, the admin plane, configuration generation and overwrite rules, diff restart/security-regression classification, and the host-audit script. Windows integration tests start a real loopback gateway and verify TLS fingerprint correlation, confirmed slow responses, zero upstream forwarding for tarpitted requests, audit persistence, drift detection, reconfiguration backups, and shutdown flow without modifying the firewall, port proxies, or external services.
+
+The cross-layer loopback attack/defense acceptance suite lives in `tests/test_attack_defense.py`. It chains a real L4Wall, HighWall, and a stub upstream over TCP and covers L4 bans/rate limits/timeouts, shared-ban failure isolation, L7 Host/smuggling/traversal/WAF/DLP/CSRF/XFF, and the direct-to-HighWall/upstream bypass boundary. See [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md) for the full matrix, measured results, and unverified items.
 
 GitHub Actions runs Ruff, mypy, coverage, and the full suite on Ubuntu/Windows with Python 3.10–3.12. CodeQL scans every pull request and weekly; Dependabot checks Actions, Python development dependencies, and the Docker base image weekly. All third-party Actions are pinned to commit SHAs, and release images carry an SBOM, provenance, a cosign signature, and a GitHub attestation.
 

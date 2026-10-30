@@ -16,3 +16,8 @@ certs/
 .coverage
 coverage.xml
 htmlcov/
+/deploy/standard/.env
+/reports/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
