@@ -18,7 +18,7 @@ class StandardDeploymentConfigTests(unittest.TestCase):
         self.assertEqual(config.upstream.port, 18080)
         self.assertEqual(config.policy.allowed_hosts, ("app.internal",))
         self.assertEqual(
-            config.policy.trusted_proxies,
+            config.policy.proxy_networks,
             (ipaddress.ip_network("172.30.0.10/32"),),
         )
         self.assertEqual(config.policy.max_xff_hops, 2)

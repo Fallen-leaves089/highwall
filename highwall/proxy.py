@@ -1360,7 +1360,7 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             address = ipaddress.ip_address(client_address[0].split("%", 1)[0])
         except (ValueError, IndexError):
             return None
-        if any(address in network for network in runtime.config.policy.trusted_proxies):
+        if any(address in network for network in runtime.config.policy.proxy_networks):
             return None
         return str(address)
 

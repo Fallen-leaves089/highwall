@@ -113,7 +113,7 @@ def build_config_report(config: Config) -> dict[str, Any]:
             "deny_path_prefixes": list(config.policy.deny_path_prefixes),
             "allowed_client_networks": _networks(config.policy.allowed_client_networks),
             "denied_client_networks": _networks(config.policy.denied_client_networks),
-            "trusted_proxies": _networks(config.policy.trusted_proxies),
+            "trusted_proxies": _networks(config.policy.proxy_networks),
             "allowed_origins": list(config.policy.allowed_origins),
             "read_only": config.policy.read_only,
             "routes": routes,
