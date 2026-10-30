@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from l4wall.config import example_config, parse_config, resolve_runtime_paths
+from l4wall.config import config_to_dict, example_config, parse_config, resolve_runtime_paths
 from l4wall.errors import ConfigError
 
 
@@ -100,6 +101,17 @@ class ConfigTests(unittest.TestCase):
         before = copy.deepcopy(raw)
         parse_config(raw)
         self.assertEqual(raw, before)
+
+    def test_effective_config_omits_secret_environment_names(self) -> None:
+        raw = example_config()
+        raw["threat_detection"]["shared_bans"]["password_env"] = "L4WALL_TEST_REDIS_PASSWORD"
+        raw["admin"]["enabled"] = True
+        raw["admin"]["token_env"] = "L4WALL_TEST_ADMIN_TOKEN"
+        rendered = json.dumps(config_to_dict(parse_config(raw)))
+        self.assertNotIn("L4WALL_TEST_REDIS_PASSWORD", rendered)
+        self.assertNotIn("L4WALL_TEST_ADMIN_TOKEN", rendered)
+        self.assertNotIn("password_env", rendered)
+        self.assertNotIn("token_env", rendered)
 
     def test_relative_runtime_paths_resolve_against_config_directory(self) -> None:
         config = parse_config(example_config())

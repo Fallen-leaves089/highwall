@@ -675,7 +675,7 @@ def resolve_runtime_paths(config: GatewayConfig, base_dir: str | Path) -> Gatewa
 
 
 def config_to_dict(config: GatewayConfig) -> dict[str, Any]:
-    """Return a JSON-serializable effective configuration."""
+    """Return a JSON-serializable effective configuration without secret references."""
     return {
         "version": config.version,
         "server": {
@@ -744,7 +744,6 @@ def config_to_dict(config: GatewayConfig) -> dict[str, Any]:
                 "connect_timeout": config.threat.shared_bans.connect_timeout,
                 "read_timeout": config.threat.shared_bans.read_timeout,
                 "sync_interval_seconds": config.threat.shared_bans.sync_interval_seconds,
-                "password_env": config.threat.shared_bans.password_env,
                 "max_payload_bytes": config.threat.shared_bans.max_payload_bytes,
                 "max_ttl_seconds": config.threat.shared_bans.max_ttl_seconds,
             },
@@ -760,7 +759,6 @@ def config_to_dict(config: GatewayConfig) -> dict[str, Any]:
             "enabled": config.admin.enabled,
             "listen_host": config.admin.listen_host,
             "listen_port": config.admin.listen_port,
-            "token_env": config.admin.token_env,
             "audit_tail_max_lines": config.admin.audit_tail_max_lines,
             "request_timeout": config.admin.request_timeout,
         },

@@ -195,6 +195,8 @@ python -m l4wall check --config config.json
 python -m l4wall inspect --config config.json
 ```
 
+`inspect` 只输出生效配置，不输出密码或管理令牌的环境变量名，可安全粘贴到工单。
+
 测试覆盖配置严格性、CIDR 策略、令牌桶、审计轮转、Agent 评分、封禁持久化、回环转发、来源拒绝、连接限速、首字节超时、字节上限、单 IP 并发上限、封禁检查独立于评分开关，以及共享封禁的超时、坏 JSON、超大响应、空键、过期/跨版本条目、TTL 截断和本地优先合并。跨层回环攻防验收见 [docs/ATTACK_TESTING.md](../../docs/ATTACK_TESTING.md)。
 
 ## 目录
