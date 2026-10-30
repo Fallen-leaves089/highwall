@@ -1,6 +1,6 @@
 # HighWall Threat Model
 
-版本：`0.10.0`
+版本：`0.11.0`
 范围：HighWall 进程及其 HTTP 入口、上游连接、审计和管理面。
 
 ## 1. 安全目标

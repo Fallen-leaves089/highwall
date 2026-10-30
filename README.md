@@ -6,9 +6,9 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代理与防护网关**。它只使用 Python 标准库，目标是把应用入口处最容易出现分歧的解析、策略、资源限制和审计做成可审计的小内核。
 
-当前源码与最新发布版本：`0.10.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明，并收紧查询参数与 JSON body 中的路径穿越识别（含多重编码）。它仍不是已经完成第三方审计的生产级产品。
+当前源码与最新发布版本：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查。它仍不是已经完成第三方审计的生产级产品。
 
-> **v0.10 重点**：上线前用 `highwall diff` 区分可热加载、必须重启和安全降级；CI 与发布镜像增加可复现的静态检查、来源证明和签名。热加载细节见 [配置热加载与优雅停机](#配置热加载与优雅停机)。
+> **v0.11 重点**：L4Wall 负责连接级准入、限速、字节上限和封禁，HighWall 继续负责 HTTP/1.1 的 WAF/DLP；两者可通过 `lite` 串联或 `standard` 骨架部署。上线前先用 [docs/STACK.md](docs/STACK.md) 核对入口、直连封堵和真实客户端 IP。
 
 ## 目录
 
@@ -38,7 +38,7 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 - 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
 - 复合部署：仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.md)；标准形态、旁路规则和验收方法见 [docs/STACK.md](docs/STACK.md)。
 
-> HighWall 仍是 `0.10.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+> HighWall 仍是 `0.11.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
 
 > **防护边界**：WAF、DLP、行为评分和蜜罐都是降低暴露面的启发式，不是认证或安全边界；同主机、同命名空间或已失陷客户端无法靠它们区分，DLP 也不能承诺“防泄漏”。
 
@@ -337,10 +337,10 @@ upstream application (ideally loopback or private network)
 
 要求 Windows PowerShell 5.1 或更新版本、Python 3.10 或更新版本，不安装第三方依赖。
 
-不想使用源码检出时，可从 [v0.10.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.10.0) 下载 wheel/sdist 和 `SHA256SUMS`，校验后安装：
+不想使用源码检出时，可从 [v0.11.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0) 下载 wheel/sdist 和 `SHA256SUMS`，校验后安装：
 
 ```bash
-python -m pip install highwall-0.10.0-py3-none-any.whl
+python -m pip install highwall-0.11.0-py3-none-any.whl
 ```
 
 ```powershell
@@ -405,10 +405,10 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 ## 容器镜像
 
-版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.10.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.10.0)。`0.10.0` 镜像随 tag 发布，并带有 cosign 签名和 GitHub provenance attestation；更早的 `0.9.0` 镜像没有这些证明，不能反向声称已签名。
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.11.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0)。`0.11.0` 镜像随 tag 发布，并带有 cosign 签名和 GitHub provenance attestation；更早的 `0.9.0` 镜像没有这些证明，不能反向声称已签名。
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.10.0
+docker pull ghcr.io/fallen-leaves089/highwall:0.11.0
 ```
 
 镜像以 UID `10001` 非 root 运行，默认执行 `python -m highwall serve -c /etc/highwall/config.json`。镜像不内置配置，缺少配置时会直接拒绝启动，不会退化为放行。
@@ -435,7 +435,7 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.10.0
+  ghcr.io/fallen-leaves089/highwall:0.11.0
 ```
 
 - 生产环境启用 TLS 时，把证书和私钥只读挂载到容器内，并在配置中使用容器内路径。
@@ -444,10 +444,10 @@ docker run --rm --name highwall \
 - `v0.10.0` 及之后发布的镜像可用以下命令验证构建来源和签名；验证时把版本号替换为实际部署的不可变 tag：
 
 ```bash
-gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.10.0 \
+gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.11.0 \
   --repo Fallen-leaves089/highwall
 
-cosign verify ghcr.io/fallen-leaves089/highwall:0.10.0 \
+cosign verify ghcr.io/fallen-leaves089/highwall:0.11.0 \
   --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
