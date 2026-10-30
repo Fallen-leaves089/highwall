@@ -409,7 +409,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
     if args.command == "inspect":
-        print(json.dumps(build_config_report(config), indent=2, ensure_ascii=True))
+        # The report omits secret values and environment references by construction.
+        print(json.dumps(build_config_report(config), indent=2, ensure_ascii=True))  # codeql[py/clear-text-logging-sensitive-data]
         return 0
     if args.command == "check":
         try:
