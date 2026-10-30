@@ -52,18 +52,12 @@ Release date: 2026-10-30
 
 ## Downloads
 
-- [highwall-0.11.0-py3-none-any.whl](https://github.com/Fallen-leaves089/highwall/releases/download/v0.11.0/highwall-0.11.0-py3-none-any.whl)
-- [highwall-0.11.0.tar.gz](https://github.com/Fallen-leaves089/highwall/releases/download/v0.11.0/highwall-0.11.0.tar.gz)
-- [l4wall-0.1.0-py3-none-any.whl](https://github.com/Fallen-leaves089/highwall/releases/download/v0.11.0/l4wall-0.1.0-py3-none-any.whl)
-- [l4wall-0.1.0.tar.gz](https://github.com/Fallen-leaves089/highwall/releases/download/v0.11.0/l4wall-0.1.0.tar.gz)
-- [SHA256SUMS](https://github.com/Fallen-leaves089/highwall/releases/download/v0.11.0/SHA256SUMS)
+The files are in the **Assets** section of the [v0.11.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0). Verify them against `SHA256SUMS` before installation:
 
 ```bash
 python -m pip install highwall-0.11.0-py3-none-any.whl
 python -m pip install l4wall-0.1.0-py3-none-any.whl
 ```
-
-Verify the downloaded files against `SHA256SUMS` before installation.
 
 ## Container image
 

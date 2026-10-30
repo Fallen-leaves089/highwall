@@ -52,18 +52,12 @@
 
 ## 下载
 
-- `highwall-0.11.0-py3-none-any.whl`
-- `highwall-0.11.0.tar.gz`
-- `l4wall-0.1.0-py3-none-any.whl`
-- `l4wall-0.1.0.tar.gz`
-- `SHA256SUMS`
+下载文件在 [v0.11.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0) 的 **Assets** 区域。下载后先用 `SHA256SUMS` 校验，再安装：
 
 ```bash
 python -m pip install highwall-0.11.0-py3-none-any.whl
 python -m pip install l4wall-0.1.0-py3-none-any.whl
 ```
-
-下载后先用 `SHA256SUMS` 校验，再安装。
 
 ## 容器镜像
 
