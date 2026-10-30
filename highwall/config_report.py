@@ -12,7 +12,7 @@ def _networks(values: tuple[Any, ...]) -> list[str]:
 
 
 def build_config_report(config: Config) -> dict[str, Any]:
-    """Return an audit-friendly view of the values HighWall will actually use."""
+    """Return an audit-friendly view without secret references or secret values."""
 
     routes: list[dict[str, Any]] = []
     for route in config.policy.routes:
@@ -169,7 +169,6 @@ def build_config_report(config: Config) -> dict[str, Any]:
             "enabled": config.admin.enabled,
             "listen_host": config.admin.listen_host,
             "listen_port": config.admin.listen_port,
-            "token_env": config.admin.token_env,
             "audit_tail_max_lines": config.admin.audit_tail_max_lines,
         },
         "threat_detection": {
@@ -214,8 +213,6 @@ def build_config_report(config: Config) -> dict[str, Any]:
         },
         "alerting": {
             "enabled": config.alerting.enabled,
-            "webhook_url_env": config.alerting.webhook_url_env,
-            "auth_token_env": config.alerting.auth_token_env,
             "timeout_seconds": config.alerting.timeout_seconds,
             "max_queue": config.alerting.max_queue,
             "cooldown_seconds": config.alerting.cooldown_seconds,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,6 +87,24 @@ class ConfigReportTests(unittest.TestCase):
             build_config_report(explicit)["policy"]["effective_hsts"],
             "max-age=123",
         )
+
+    def test_report_omits_secret_environment_references(self) -> None:
+        config = base_config(
+            self.directory,
+            18080,
+            overrides={
+                "admin": {"token_env": "HIGHWALL_TEST_ADMIN_TOKEN"},
+                "alerting": {
+                    "webhook_url_env": "HIGHWALL_TEST_WEBHOOK",
+                    "auth_token_env": "HIGHWALL_TEST_AUTH_TOKEN",
+                },
+            },
+        )
+        rendered = json.dumps(build_config_report(config))
+        for value in ("HIGHWALL_TEST_ADMIN_TOKEN", "HIGHWALL_TEST_WEBHOOK", "HIGHWALL_TEST_AUTH_TOKEN"):
+            self.assertNotIn(value, rendered)
+        for key in ("token_env", "webhook_url_env", "auth_token_env"):
+            self.assertNotIn(key, rendered)
 
 
 if __name__ == "__main__":
