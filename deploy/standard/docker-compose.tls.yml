@@ -1,0 +1,4 @@
+services:
+  haproxy:
+    ports:
+      - "${EDGE_HTTPS_PORT:-8443}:8443"

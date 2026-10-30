@@ -1271,8 +1271,22 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             runtime.emit_alert(alert, str(alert.get("event", "ddos")))
 
     def _reject_busy(self, request: socket.socket, runtime: Runtime) -> None:
+        peer_ip = ""
+        try:
+            peer_ip = str(request.getpeername()[0])
+        except (OSError, IndexError, TypeError):
+            peer_ip = ""
+        request_id = secrets.token_hex(12)
+        started = time.monotonic()
+        body = b""
         if not self.tls_enabled:
-            body = b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+            body = (
+                b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n"
+                b"Retry-After: 1\r\nContent-Length: 0\r\nX-Request-ID: "
+                + request_id.encode("ascii")
+                + b"\r\n\r\n"
+            )
+        if body:
             try:
                 request.settimeout(1.0)
                 request.sendall(body)
@@ -1298,6 +1312,19 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         except OSError:
             pass
         runtime.metrics.inc("blocked_total")
+        runtime.audit.write(
+            AuditRecord(
+                event="request_blocked",
+                request_id=request_id,
+                client_ip=peer_ip,
+                status=503,
+                outcome="blocked",
+                rule_id="HW-SERVER-1001",
+                duration_ms=int((time.monotonic() - started) * 1000),
+                response_bytes=len(body),
+                detail="inflight_limit",
+            )
+        )
         detector = runtime.ddos_detector
         if detector is not None:
             detector.record_connection_rejection()

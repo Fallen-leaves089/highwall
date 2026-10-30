@@ -11,6 +11,7 @@ tests
 docs
 scripts
 deploy
+subprojects
 README.md
 README.en.md
 SECURITY.md

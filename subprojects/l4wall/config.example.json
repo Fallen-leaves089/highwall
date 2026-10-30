@@ -1,0 +1,114 @@
+{
+  "version": 1,
+  "server": {
+    "listen_host": "127.0.0.1",
+    "max_connections": 512,
+    "max_connections_per_ip": 32,
+    "accept_backlog": 128,
+    "shutdown_timeout": 30.0,
+    "require_client_allowlist": false
+  },
+  "listeners": [
+    {
+      "name": "web",
+      "listen_port": 18080,
+      "upstream_host": "127.0.0.1",
+      "upstream_port": 18082,
+      "allowed_client_networks": [
+        "127.0.0.1/32",
+        "::1/128"
+      ],
+      "denied_client_networks": [],
+      "connect_timeout": 3.0,
+      "first_byte_timeout": 5.0,
+      "idle_timeout": 60.0,
+      "max_connection_seconds": 300.0,
+      "max_bytes_per_direction": 10485760,
+      "max_connections_per_ip": 16,
+      "new_connections_per_second": 10.0,
+      "new_connections_burst": 20,
+      "read_chunk_bytes": 65536
+    },
+    {
+      "name": "api",
+      "listen_port": 18081,
+      "upstream_host": "127.0.0.1",
+      "upstream_port": 18083,
+      "allowed_client_networks": [
+        "127.0.0.1/32",
+        "::1/128"
+      ],
+      "denied_client_networks": [],
+      "connect_timeout": 3.0,
+      "first_byte_timeout": 5.0,
+      "idle_timeout": 60.0,
+      "max_connection_seconds": 300.0,
+      "max_bytes_per_direction": 10485760,
+      "max_connections_per_ip": 16,
+      "new_connections_per_second": 10.0,
+      "new_connections_burst": 20,
+      "read_chunk_bytes": 65536
+    }
+  ],
+  "threat_detection": {
+    "enabled": true,
+    "mode": "score",
+    "window_seconds": 10.0,
+    "min_connections": 20,
+    "min_distinct_listeners": 2,
+    "min_short_connections": 10,
+    "min_zero_byte_connections": 5,
+    "min_rejections": 5,
+    "short_connection_seconds": 1.0,
+    "short_connection_bytes": 64,
+    "regular_timing_max_cv": 0.25,
+    "agent_min_signals": 3,
+    "agent_score": 30,
+    "score_threshold": 70,
+    "confirm_score": 85,
+    "confirm_after_seconds": 300.0,
+    "containment_seconds": 300.0,
+    "confirmed_containment_seconds": 900.0,
+    "throttle_ms": 500,
+    "max_throttle_ms": 3000,
+    "max_tracked_clients": 10000,
+    "max_listeners_per_client": 64,
+    "mark_ttl_seconds": 86400.0,
+    "offender_path": "offenders.json",
+    "ban_prefix_v4": 32,
+    "ban_prefix_v6": 128,
+    "max_ban_entries": 10000,
+    "shared_bans": {
+      "enabled": false,
+      "backend": "redis",
+      "host": "127.0.0.1",
+      "port": 6379,
+      "db": 0,
+      "key": "l4wall:bans:v1",
+      "connect_timeout": 0.5,
+      "read_timeout": 0.5,
+      "sync_interval_seconds": 1.0,
+      "password_env": "",
+      "max_payload_bytes": 1048576,
+      "max_ttl_seconds": 86400.0
+    }
+  },
+  "audit": {
+    "path": "audit.jsonl",
+    "max_bytes": 10485760,
+    "backup_count": 5,
+    "include_client_ip": true,
+    "on_write_failure": "fail_closed"
+  },
+  "admin": {
+    "enabled": false,
+    "listen_host": "127.0.0.1",
+    "listen_port": 18091,
+    "token_env": "L4WALL_ADMIN_TOKEN",
+    "audit_tail_max_lines": 200,
+    "request_timeout": 5.0
+  },
+  "metrics": {
+    "enabled": true
+  }
+}

@@ -1,0 +1,167 @@
+{
+  "version": 1,
+  "server": {
+    "listen_host": "0.0.0.0",
+    "listen_port": 18090,
+    "max_connections": 128,
+    "max_connections_per_ip": 64,
+    "max_inflight_requests": 64,
+    "header_timeout": 5.0,
+    "body_timeout": 15.0,
+    "shutdown_timeout": 30.0,
+    "tls": {
+      "enabled": false,
+      "min_version": "TLSv1_2",
+      "handshake_timeout": 5.0
+    }
+  },
+  "upstream": {
+    "scheme": "http",
+    "host": "172.31.0.30",
+    "port": 18080,
+    "connect_timeout": 3.0,
+    "read_timeout": 15.0,
+    "total_timeout": 30.0,
+    "max_response_bytes": 4194304,
+    "circuit_breaker": {
+      "enabled": true,
+      "failure_threshold": 5,
+      "window": 30.0,
+      "open_seconds": 30.0,
+      "half_open_max_requests": 1
+    }
+  },
+  "policy": {
+    "allowed_hosts": ["app.internal"],
+    "allowed_methods": ["GET", "HEAD", "POST"],
+    "allowed_path_prefixes": ["/"],
+    "deny_path_prefixes": [
+      "/.git",
+      "/.svn",
+      "/.hg",
+      "/.env",
+      "/server-status",
+      "/actuator/heapdump",
+      "/actuator/env"
+    ],
+    "trusted_proxies": ["172.30.0.10/32"],
+    "allowed_client_networks": [],
+    "denied_client_networks": [],
+    "allowed_origins": [],
+    "read_only": false,
+    "routes": [
+      {
+        "path_prefix": "/api",
+        "max_body_bytes": 65536,
+        "max_concurrent": 16
+      }
+    ],
+    "honeypot": {
+      "enabled": true,
+      "ban_seconds": 0,
+      "presets": ["common"]
+    },
+    "reject_encoded_separators": true,
+    "allow_path_parameters": false,
+    "allow_trailing_dot_or_space": false,
+    "reject_duplicate_headers": true,
+    "reject_get_body": true,
+    "allowed_body_content_types": [
+      "application/json",
+      "application/x-www-form-urlencoded",
+      "text/plain"
+    ],
+    "max_request_line": 8192,
+    "max_header_count": 64,
+    "max_header_bytes": 16384,
+    "max_body_bytes": 1048576,
+    "max_xff_hops": 2,
+    "waf_enabled": true,
+    "waf_mode": "block",
+    "waf_rules": ["sqli", "xss", "traversal", "cmdi", "jndi", "ssrf"],
+    "response_scan_mode": "block",
+    "response_scan_max_bytes": 1048576,
+    "response_scan_headers": true,
+    "response_integrity_mode": "off",
+    "integrity_pins": [],
+    "security_headers": {}
+  },
+  "rate_limit": {
+    "enabled": true,
+    "per_ip_rate": 50.0,
+    "per_ip_burst": 100,
+    "global_rate": 1000.0,
+    "global_burst": 2000,
+    "max_tracked_clients": 10000,
+    "client_idle_ttl": 300.0,
+    "auto_ban_threshold": 30,
+    "auto_ban_window": 60.0,
+    "auto_ban_seconds": 300.0,
+    "max_ban_entries": 10000
+  },
+  "audit": {
+    "path": "/var/lib/highwall/audit.jsonl",
+    "max_bytes": 10485760,
+    "backup_count": 5,
+    "include_client_ip": true,
+    "path_mode": "redact",
+    "on_write_failure": "fail_closed"
+  },
+  "admin": {
+    "enabled": false,
+    "listen_host": "127.0.0.1",
+    "listen_port": 18091,
+    "token_env": "HIGHWALL_ADMIN_TOKEN",
+    "audit_tail_max_lines": 200
+  },
+  "threat_detection": {
+    "enabled": true,
+    "mode": "monitor",
+    "agent_mode": "score",
+    "agent_min_signals": 3,
+    "agent_score": 30,
+    "window_seconds": 10.0,
+    "min_requests": 10,
+    "min_distinct_paths": 6,
+    "min_violations": 3,
+    "score_threshold": 70,
+    "confirm_score": 85,
+    "confirm_after_seconds": 300.0,
+    "containment_seconds": 300.0,
+    "confirmed_containment_seconds": 900.0,
+    "throttle_ms": 750,
+    "max_throttle_ms": 3000,
+    "tarpit_hold_seconds": 15.0,
+    "max_tarpit_hold_seconds": 30.0,
+    "per_actor_tarpit_slots": 4,
+    "global_tarpit_slots": 16,
+    "max_tracked_actors": 10000,
+    "max_paths_per_actor": 64,
+    "alert_cooldown_seconds": 60.0,
+    "mark_ttl_seconds": 86400.0,
+    "offender_path": "/var/lib/highwall/offenders.json"
+  },
+  "ddos_detection": {
+    "enabled": true,
+    "window_seconds": 10.0,
+    "request_rate_threshold": 500.0,
+    "global_rejection_ratio": 0.2,
+    "connection_saturation": 0.85,
+    "tls_failure_threshold": 20,
+    "upstream_error_ratio": 0.05,
+    "min_signals": 2,
+    "cooldown_seconds": 60.0,
+    "escalation_seconds": 300.0,
+    "recovery_seconds": 30.0
+  },
+  "alerting": {
+    "enabled": false,
+    "webhook_url_env": "HIGHWALL_ALERT_WEBHOOK",
+    "auth_token_env": "HIGHWALL_ALERT_TOKEN",
+    "timeout_seconds": 3.0,
+    "max_queue": 256,
+    "cooldown_seconds": 60.0,
+    "include_client_ip": false,
+    "allow_http": false
+  }
+}

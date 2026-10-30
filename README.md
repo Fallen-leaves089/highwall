@@ -18,6 +18,7 @@ HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代
 - [攻击者指纹、标记与拖延](#攻击者指纹标记与拖延)
 - [L7 DDoS 告警与 5 分钟响应窗口](#l7-ddos-告警与-5-分钟响应窗口)
 - [威胁防护快速启用](#威胁防护快速启用)
+- [L4Wall 子项目与复合部署](#l4wall-子项目与复合部署)
 - [快速开始](#快速开始)
 - [配置要点](#配置要点)
 - [配置变更检查](#配置变更检查)
@@ -35,6 +36,7 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 
 - 适合：给内部服务、静态站、管理面或小型 API 增加一层入口防护。
 - 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
+- 复合部署：仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.md)；标准形态、旁路规则和验收方法见 [docs/STACK.md](docs/STACK.md)。
 
 > HighWall 仍是 `0.10.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
 
@@ -296,6 +298,17 @@ HighWall 是 L7 网关，不是“绝对高防”：
 - 不给上游添加登录、MFA 或授权能力。上游自己的会话安全仍然重要。
 - 不自动管理证书；TLS 证书和私钥需要由部署者提供并保护。
 
+## L4Wall 子项目与复合部署
+
+HighWall 仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.md)。它负责连接级准入、限速、超时、行为评分、封禁和审计；HighWall 继续负责 HTTP/1.1 的 WAF、DLP 和 L7 策略。两者不合并进程，也不互相替代。
+
+支持两种形态：
+
+- `lite`：`客户端 -> L4Wall -> HighWall -> 上游`，适合单机、小规模和 Windows。
+- `standard`：`客户端 -> HAProxy/Envoy -> HighWall -> 上游`，HAProxy 负责 TLS、HTTP/2、WebSocket 和真实 IP 清洗；L4Wall 作为连接级控制面。部署骨架见 [`deploy/standard/`](deploy/standard/README.md)。
+
+上线前必须读 [docs/STACK.md](docs/STACK.md)，重点确认：HighWall 和上游没有公网端口、L4Wall 管理面只回环、客户端转发头会被边缘删除并重写、直连 HighWall/上游在攻击者视角下不可达。L4Wall 已实现可选的 Redis 共享封禁读取端；自动发布端、Controller 和多节点 HA 仍在后续里程碑，不能把标准骨架当成完整控制面。
+
 ## 架构
 
 ```text
@@ -525,7 +538,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 1. 先只绑定回环做验收，再绑定业务网卡；不要直接暴露到公网。
 2. 使用专用低权限账户运行，配置、审计、证书目录与运行账户分离 ACL。
-3. 不要从 WSL 可写目录、Codex 工作区或任何攻击机可写目录启动生产实例。
+3. 不要从 WSL 可写目录、共享开发工作区或任何攻击机可写目录启动生产实例。
 4. 上游放在回环或私有网段，并用主机防火墙限制“网关 -> 上游”和“运维 -> 管理面”。
 5. 生产环境启用 TLS，私钥权限只给服务账户；不要使用自签名证书对外。
 6. 保留现有网络隔离和用户/命名空间分离。HighWall 不能替代操作系统边界。
@@ -581,6 +594,8 @@ python -m scripts.benchmark_proxy --json
 脚本分别测量直连上游、经 HighWall 的允许请求和 WAF 拦截请求，输出 p50/p95/p99 与吞吐。数字会受当前机器负载、审计落盘、DLP/WAF 规则和 Python 版本影响，只能作为同机回归基线，不是容量 SLA 或采购承诺。
 
 当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、攻击者指纹/标记/慢速槽位、DDoS 状态机、告警去重与队列背压、管理面、配置生成/覆盖规则、配置 diff 的重启/安全降级分类与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证 TLS 指纹关联、确认后慢速响应、上游零转发、审计落盘、漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
+
+跨层回环攻防验收位于 `tests/test_attack_defense.py`：真实 TCP 串联 L4Wall、HighWall 和模拟上游，覆盖 L4 封禁/限速/超时、共享封禁故障隔离、L7 Host/走私/穿越/WAF/DLP/CSRF/XFF，以及直连 HighWall/上游的绕过边界。完整矩阵、实测结果和未验证项见 [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md)。
 
 GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.12 上执行 Ruff、mypy、覆盖率与完整测试；CodeQL 每周和每次 PR 扫描；Dependabot 每周检查 Actions、Python 开发依赖和 Docker 基础镜像。所有第三方 Actions 固定到提交 SHA，发布镜像附带 SBOM、provenance、cosign 签名和 GitHub attestation。
 

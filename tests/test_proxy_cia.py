@@ -94,23 +94,38 @@ class ProxyCiaIntegrationTests(unittest.TestCase):
         self.assertEqual(result["response"][0], 200)
 
     def test_global_inflight_limit_returns_503(self) -> None:
+        directory = Path(self.temp.name)
         config = base_config(
-            Path(self.temp.name),
+            directory,
             self.stub.port,
             overrides={"server": {"max_inflight_requests": 1}},
         )
         with GatewayHarness(config) as gateway:
             thread, result = self.start_held_request(gateway)
             try:
-                status, _, _ = self.request(gateway, build_request(path="/ok"), timeout=2.0)
+                status, headers, _ = self.request(gateway, build_request(path="/ok"), timeout=2.0)
                 self.assertEqual(status, 503)
                 self.assertEqual(gateway.runtime.metrics.snapshot()["inflight_rejections_total"], 1)
+                self.assertTrue(header_values(headers, "Retry-After"))
+                busy_request_ids = header_values(headers, "X-Request-ID")
+                self.assertEqual(len(busy_request_ids), 1)
             finally:
                 self.stub.hold_release.set()
                 thread.join(timeout=5.0)
         self.assertFalse(thread.is_alive())
         self.assertNotIn("error", result)
         self.assertEqual(result["response"][0], 200)
+        events = [
+            json.loads(line)
+            for line in (directory / "audit.jsonl").read_text("utf-8").splitlines()
+        ]
+        busy_events = [event for event in events if event["rule_id"] == "HW-SERVER-1001"]
+        self.assertEqual(len(busy_events), 1)
+        self.assertEqual(busy_events[0]["event"], "request_blocked")
+        self.assertEqual(busy_events[0]["status"], 503)
+        self.assertNotEqual(busy_events[0]["request_id"], "-")
+        self.assertGreater(busy_events[0]["response_bytes"], 0)
+        self.assertEqual(busy_events[0]["request_id"], busy_request_ids[0])
 
     def test_integrity_detect_allows_response_and_audits_hit(self) -> None:
         pin = {
