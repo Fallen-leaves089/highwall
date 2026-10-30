@@ -1,5 +1,7 @@
 # HighWall v0.11.0 + L4Wall 0.1.0
 
+[English](RELEASE-v0.11.0.en.md) | 简体中文
+
 发布日期：2026-10-30
 
 ## 概览
