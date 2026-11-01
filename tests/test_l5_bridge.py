@@ -92,6 +92,7 @@ class L5BridgeIntegrationTests(unittest.TestCase):
         allow_error: bool = False,
     ) -> bytes:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
         context.set_alpn_protocols(alpn or ["http/1.1"])

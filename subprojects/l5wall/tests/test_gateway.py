@@ -56,6 +56,7 @@ class GatewayTests(unittest.TestCase):
         thread = threading.Thread(target=serve, daemon=True)
         thread.start()
         client_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        client_context.minimum_version = ssl.TLSVersion.TLSv1_2
         client_context.check_hostname = False
         client_context.verify_mode = ssl.CERT_NONE
         client_context.set_alpn_protocols(["http/1.1"])
