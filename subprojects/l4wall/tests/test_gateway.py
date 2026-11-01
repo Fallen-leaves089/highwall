@@ -5,6 +5,7 @@ import contextlib
 import dataclasses
 import ipaddress
 import socket
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -111,6 +112,16 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
     async def _read_until_closed(self, reader: asyncio.StreamReader) -> bytes:
         return await asyncio.wait_for(reader.read(), timeout=2.0)
 
+    async def _wait_for_audit(self, path: Path, *needles: str) -> str:
+        deadline = asyncio.get_running_loop().time() + 2.0
+        while True:
+            text = path.read_text(encoding="utf-8") if path.exists() else ""
+            if all(needle in text for needle in needles):
+                return text
+            if asyncio.get_running_loop().time() >= deadline:
+                self.fail(f"audit did not contain {needles!r}: {text}")
+            await asyncio.sleep(0.02)
+
     async def test_echo_round_trip(self) -> None:
         gateway, port, audit = await self._start_gateway()
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
@@ -119,11 +130,30 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await asyncio.wait_for(reader.readexactly(5), 2.0), b"hello")
         writer.close()
         await writer.wait_closed()
-        await asyncio.sleep(0.05)
-        text = audit.path.read_text(encoding="utf-8")
-        self.assertIn('"event":"connection_allowed"', text)
-        self.assertIn('"event":"connection_closed"', text)
+        await self._wait_for_audit(
+            audit.path,
+            '"event":"connection_allowed"',
+            '"event":"connection_closed"',
+        )
         self.assertEqual(gateway.listener_ports["web"], port)
+
+    async def test_proxy_v2_header_precedes_client_bytes(self) -> None:
+        _, port, _ = await self._start_gateway(listener_updates={"send_proxy_v2": True})
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        writer.write(b"ping")
+        await writer.drain()
+
+        frame = await asyncio.wait_for(reader.readexactly(32), 2.0)
+        self.assertEqual(frame[:12], b"\r\n\r\n\x00\r\nQUIT\n")
+        self.assertEqual(frame[12:14], bytes((0x21, 0x11)))
+        self.assertEqual(struct.unpack("!H", frame[14:16])[0], 12)
+        source_port, destination_port = struct.unpack("!HH", frame[24:28])
+        self.assertGreater(source_port, 0)
+        self.assertEqual(destination_port, port)
+        self.assertEqual(frame[28:32], b"ping")
+
+        writer.close()
+        await writer.wait_closed()
 
     async def test_source_not_allowed(self) -> None:
         _, port, audit = await self._start_gateway(
@@ -133,9 +163,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._read_until_closed(reader), b"")
         writer.close()
         await writer.wait_closed()
-        await asyncio.sleep(0.05)
-        text = audit.path.read_text(encoding="utf-8")
-        self.assertIn('"reason":"source_not_allowed"', text)
+        await self._wait_for_audit(audit.path, '"reason":"source_not_allowed"')
 
     async def test_connection_rate_limit(self) -> None:
         _, port, audit = await self._start_gateway(
@@ -151,9 +179,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await second_writer.wait_closed()
         first_writer.close()
         await first_writer.wait_closed()
-        await asyncio.sleep(0.05)
-        text = audit.path.read_text(encoding="utf-8")
-        self.assertIn('"reason":"connection_rate"', text)
+        await self._wait_for_audit(audit.path, '"reason":"connection_rate"')
 
     async def test_byte_limit(self) -> None:
         _, port, audit = await self._start_gateway(
@@ -165,9 +191,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._read_until_closed(reader), b"")
         writer.close()
         await writer.wait_closed()
-        await asyncio.sleep(0.05)
-        text = audit.path.read_text(encoding="utf-8")
-        self.assertIn('"reason":"byte_limit"', text)
+        await self._wait_for_audit(audit.path, '"reason":"byte_limit"')
 
     async def test_first_byte_timeout(self) -> None:
         _, port, audit = await self._start_gateway(
@@ -177,9 +201,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._read_until_closed(reader), b"")
         writer.close()
         await writer.wait_closed()
-        await asyncio.sleep(0.05)
-        text = audit.path.read_text(encoding="utf-8")
-        self.assertIn('"reason":"first_byte_timeout"', text)
+        await self._wait_for_audit(audit.path, '"reason":"first_byte_timeout"')
 
     async def test_pre_banned_source_is_denied(self) -> None:
         gateway, port, audit = await self._start_gateway()
@@ -188,9 +210,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self._read_until_closed(reader), b"")
         writer.close()
         await writer.wait_closed()
-        await asyncio.sleep(0.05)
-        text = audit.path.read_text(encoding="utf-8")
-        self.assertIn('"reason":"banned"', text)
+        await self._wait_for_audit(audit.path, '"reason":"banned"')
 
     async def test_per_ip_connection_cap(self) -> None:
         _, port, audit = await self._start_gateway(
@@ -206,9 +226,7 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         await second_writer.wait_closed()
         first_writer.close()
         await first_writer.wait_closed()
-        await asyncio.sleep(0.05)
-        text = audit.path.read_text(encoding="utf-8")
-        self.assertIn('"reason":"ip_capacity"', text)
+        await self._wait_for_audit(audit.path, '"reason":"ip_capacity"')
 
 
 if __name__ == "__main__":

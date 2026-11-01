@@ -617,6 +617,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         banned_request = False
         route_slot_key: str | None = None
         fingerprint = ""
+        correlation_fingerprint = ""
         shape_fingerprint = ""
         threat_delay_ms = 0
         threat_tarpitted = False
@@ -742,6 +743,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                     status,
                     client_ip=client_ip,
                     request_id=request_id,
+                    correlation_fingerprint_value=correlation_fingerprint,
                 )
                 if violation is not None and violation.alert is not None and threat_alert is None:
                     threat_alert = violation.alert
@@ -839,6 +841,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                     request_id=request_id,
                 )
                 fingerprint = assessment.fingerprint
+                correlation_fingerprint = assessment.correlation_fingerprint
                 shape_fingerprint = assessment.shape_fingerprint
                 if assessment.ban_ip and runtime.auto_ban is not None:
                     runtime.auto_ban.force_ban(client_ip, max(1.0, assessment.ban_seconds))

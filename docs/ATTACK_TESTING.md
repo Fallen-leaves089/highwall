@@ -1,14 +1,16 @@
 # L4Wall + HighWall 回环攻防验收
 
-版本：HighWall `0.11.0` / L4Wall `0.1.0`
-日期：2026-10-30  
+版本：HighWall `0.12.0.dev0`（当前回归清单包含 L5 桥接）/ L4Wall `0.1.0`
+日期：2026-10-30（2026-11-01 复核）
 性质：维护者在隔离本机环境中执行的自动化授权攻防验收  
 范围：`攻击客户端 -> L4Wall -> HighWall -> 模拟上游` 的本地回环链路
+
+> 本文件记录当前 H1 回环验收。完整目标版本完成后，另按 [DSH-SECURITY-ACCEPTANCE.md](DSH-SECURITY-ACCEPTANCE.md) 由 DSH AI Agent 在隔离靶场执行独立安全测试；AI 测试不替代第三方审计，Critical/High 发现必须人工复现。
 
 ## 0. 结论先看
 
 - 26 项端到端攻防与边界测试全部通过：`tests/test_attack_defense.py`。
-- L4Wall 65 项、HighWall 354 项回归测试通过。
+- HighWall 全量回归通过；原生真实串联默认跳过，显式开启后单独通过。L4Wall 当前 71 项通过，历史 0.11.0 基线为 65 项。
 - 本轮发现并修复 1 个失败开放问题：关闭启发式评分时，已存在的本地/共享封禁会被跳过。现在封禁检查独立于评分开关。
 - 同时修复共享同步超时后的孤儿任务和未取回异常，避免故障场景产生后台悬空任务。
 - 已实际验证：L4 连接层拒绝不会到达 HighWall 或上游；L4 封禁重启后仍生效；Redis 不可达或返回坏 JSON 不会清空本地封禁；共享封禁可被导入并拦截流量。
@@ -85,11 +87,11 @@ L4Wall 在自己的 asyncio 线程中运行，HighWall 在测试线程中运行�
 
 ```text
 tests/test_attack_defense.py                 26 tests   OK
-subprojects/l4wall/tests                     65 tests   OK
-tests（HighWall 全量）                       354 tests  OK
+subprojects/l4wall/tests                     71 tests   OK
+tests（HighWall 全量）                       384 tests  OK（1 skipped）
 ruff check（含 subprojects/l4wall）          通过
-mypy（HighWall 28 个源文件）                 通过
-mypy（L4Wall 13 个源文件）                   通过
+mypy（HighWall 30 个源文件）                 通过
+mypy（L4Wall 14 个源文件）                   通过
 compileall                                   通过
 l4wall demo                                  PASS
 l4wall check --config config.example.json    通过

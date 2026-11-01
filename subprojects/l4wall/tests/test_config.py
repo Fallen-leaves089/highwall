@@ -16,6 +16,14 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.version, 1)
         self.assertEqual(len(config.listeners), 2)
         self.assertEqual(config.listeners[0].name, "web")
+        self.assertFalse(config.listeners[0].send_proxy_v2)
+
+    def test_proxy_v2_is_opt_in_and_serialized(self) -> None:
+        raw = example_config()
+        raw["listeners"][0]["send_proxy_v2"] = True
+        config = parse_config(raw)
+        self.assertTrue(config.listeners[0].send_proxy_v2)
+        self.assertTrue(config_to_dict(config)["listeners"][0]["send_proxy_v2"])
 
     def test_unknown_key_is_rejected(self) -> None:
         raw = example_config()

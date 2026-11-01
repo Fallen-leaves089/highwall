@@ -27,7 +27,8 @@
       "max_connections_per_ip": 16,
       "new_connections_per_second": 10.0,
       "new_connections_burst": 20,
-      "read_chunk_bytes": 65536
+      "read_chunk_bytes": 65536,
+      "send_proxy_v2": false
     },
     {
       "name": "api",
@@ -47,7 +48,8 @@
       "max_connections_per_ip": 16,
       "new_connections_per_second": 10.0,
       "new_connections_burst": 20,
-      "read_chunk_bytes": 65536
+      "read_chunk_bytes": 65536,
+      "send_proxy_v2": false
     }
   ],
   "threat_detection": {

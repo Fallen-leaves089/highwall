@@ -4,11 +4,11 @@
 
 [![CI](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml/badge.svg)](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代理与防护网关**。它只使用 Python 标准库，目标是把应用入口处最容易出现分歧的解析、策略、资源限制和审计做成可审计的小内核。
+HighWall 是一个**失败关闭（fail-closed）的 HTTP 应用层反向代理与防护网关**。它保留零第三方依赖的 Python HTTP/1.1 基线，同时提供 Rust 原生 B+D-4 数据面，目标是让应用入口的解析、策略、资源限制和审计可验证、可回归。
 
-当前源码与最新发布版本：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查。它仍不是已经完成第三方审计的生产级产品。
+当前源码：`0.12.0.dev0`（未发布）；最新发布版本：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查；v0.12 进入护栏阶段，加入精确 IP 执法键、Safe Ops 只读预演、运行时能力清单、独立 L5Wall 子项目、L4Wall PROXY v2 真实来源链和原生 B+D-4 数据面。原生核心已覆盖 TLS/QUIC、H1/H2/H3、H1 WebSocket、H2/H3 gRPC、有界正文 WAF/DLP 和 QUIC 来源 ACL，H1/H2/H3 按 C3 声明，C4 仍有未覆盖项。DSH 已完成首轮、r5 与 r6 定向独立复测：0 Critical、0 High；r5 的 8 个定向项中 7 项关闭，HWA-11 随后在 r6 窄范围复测中关闭；完整生产准入尚未完成，因此它仍不是已经完成第三方审计或生产准入的产品。
 
-> **v0.11 重点**：L4Wall 负责连接级准入、限速、字节上限和封禁，HighWall 继续负责 HTTP/1.1 的 WAF/DLP；两者可通过 `lite` 串联或 `standard` 骨架部署。上线前先用 [docs/STACK.md](docs/STACK.md) 核对入口、直连封堵和真实客户端 IP。
+> **v0.12 重点**：L4Wall 继续负责 TCP 连接准入、限速、字节上限和封禁；Python HighWall 保留 H1 基线和策略工具；Rust 原生 B+D-4 数据面负责 TLS/QUIC、H1/H2/H3 和有界正文检查。上线前先用 [docs/STACK.md](docs/STACK.md) 核对入口、直连封堵、真实客户端 IP 和 TCP/UDP 分叉。
 
 ## 目录
 
@@ -19,9 +19,12 @@ HighWall 是一个**失败关闭（fail-closed）的 HTTP/1.1 应用层反向代
 - [L7 DDoS 告警与 5 分钟响应窗口](#l7-ddos-告警与-5-分钟响应窗口)
 - [威胁防护快速启用](#威胁防护快速启用)
 - [L4Wall 子项目与复合部署](#l4wall-子项目与复合部署)
+- [L5/H2/H3 架构设计](#l5h2h3-架构设计)
 - [快速开始](#快速开始)
 - [配置要点](#配置要点)
 - [配置变更检查](#配置变更检查)
+- [Safe Ops 只读预演](#safe-ops-只读预演)
+- [协议覆盖清单](#协议覆盖清单)
 - [常见问题与排查](#常见问题与排查)
 - [部署原则](#部署原则)
 - [测试与冒烟](#测试与冒烟)
@@ -38,7 +41,7 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 - 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
 - 复合部署：仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.md)；标准形态、旁路规则和验收方法见 [docs/STACK.md](docs/STACK.md)。
 
-> HighWall 仍是 `0.11.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+> HighWall 当前开发版为 `0.12.0.dev0`，最新发布仍为 `0.11.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
 
 > **防护边界**：WAF、DLP、行为评分和蜜罐都是降低暴露面的启发式，不是认证或安全边界；同主机、同命名空间或已失陷客户端无法靠它们区分，DLP 也不能承诺“防泄漏”。
 
@@ -90,7 +93,7 @@ python -m highwall serve -c config.json
 
 ## 它解决什么
 
-- 严格解析 HTTP/1.x：只接受 origin-form、显式 `Content-Length`，拒绝 `Transfer-Encoding`、`TE`、折叠头、重复敏感头、协议升级和编码请求体，直接消除常见的 CL.TE / TE.CL 请求走私面。
+- 严格解析 HTTP/1.x：请求只接受 origin-form。Python 代理路径要求显式 `Content-Length`；原生 H1 核心额外接受单个合法 `Transfer-Encoding: chunked`，解块后重新生成长度 framing。两条路径都拒绝重复或组合 TE、TE+CL、`TE`、trailers、折叠头、重复敏感头、协议升级和编码请求体，直接消除常见的 CL.TE / TE.CL 请求走私面。
 - Host、方法、路径前缀三层默认拒绝；Host 必须精确匹配配置中的 authority。
 - 路径解码后做点段、编码分隔符、反斜杠、控制字符和 NFKC 归一化检查；默认拒绝路径参数、尾随点和尾随空格，路由 ACL/方法/只读判断统一按大小写不敏感的规范化路径执行。
 - 保守的应用层签名（SQL 注入、XSS、路径穿越、命令注入、JNDI、SSRF 启发式），支持 `detect` 与 `block` 模式。
@@ -99,7 +102,7 @@ python -m highwall serve -c config.json
 - 可按客户端 CIDR 做应用层允许/拒绝；拒绝列表优先，未配置时保持兼容。
 - 可选的 Origin 白名单：配置后，写方法缺少或伪造 Origin 会被拒绝，`Sec-Fetch-Site: cross-site` 的写请求也会被拒绝。
 - 可按客户端限制并发连接数，并在短时间内反复触发协议/策略错误时临时封禁该客户端。
-- 可对 HTTP/TLS 形状和来源前缀做多信号指纹关联；疑似阶段先限速，确认后写入有界持久标记，并对慢速通道施加 5 分钟疑似窗口或 15 分钟确认窗口。
+- 可对 HTTP/TLS 形状做多信号指纹；执法封禁键绑定精确客户端地址与稳定形状，`/24`、`/64` 只用于关联分析，不直接扩大封禁范围。疑似阶段先限速，确认后写入有界持久标记，并对慢速通道施加 5 分钟疑似窗口或 15 分钟确认窗口。
 - 可聚合 L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误，触发 DDoS 告警并异步推送 Webhook；支持恢复事件和 5 分钟响应窗口。
 - 可按最长路径前缀配置路由策略：方法子集、只读、路由级来源 CIDR、请求体上限、独立并发槽位和每客户端令牌桶限速。
 - 可配置精确路径蜜罐：内置常见扫描路径模板，返回本地静态诱饵，绝不访问上游；命中后记录独立审计事件，并可立即封禁来源或施加有上限的短延迟。
@@ -116,6 +119,7 @@ python -m highwall serve -c config.json
 - 管理面只允许回环地址，使用环境变量提供的 Bearer token，只读暴露健康、指标和审计尾部。
 - 附带只读 Windows 宿主审计脚本，检查防火墙默认策略、RPC/SMB/RDP 监听、端口转发、Defender/ASR、备份可见性和 HighWall 文件 ACL；脚本不修改任何系统状态。
 - 附带 `highwall init`、`highwall inspect` 和 Windows `scripts/quickstart.ps1`：一条命令生成配置、启动、验收并记录状态；不会静默覆盖已有配置。
+- `highwall capabilities --json` 输出当前 L5/L7 覆盖等级；`highwall ops preview` 只读预演类型化运维计划，R2/R3 破坏性动作默认拒绝，且不存在执行入口。
 
 ## CIA 覆盖边界
 
@@ -300,14 +304,27 @@ HighWall 是 L7 网关，不是“绝对高防”：
 
 ## L4Wall 子项目与复合部署
 
-HighWall 仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.md)。它负责连接级准入、限速、超时、行为评分、封禁和审计；HighWall 继续负责 HTTP/1.1 的 WAF、DLP 和 L7 策略。两者不合并进程，也不互相替代。
+HighWall 仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.md)。它负责连接级准入、限速、超时、行为评分、封禁和审计；Python HighWall 继续负责 HTTP/1.1 的 WAF、DLP 和 L7 策略，原生 B+D-4 核心负责 H1/H2/H3。它们不合并进程，也不互相替代。
 
-支持两种形态：
+支持三种形态：
 
 - `lite`：`客户端 -> L4Wall -> HighWall -> 上游`，适合单机、小规模和 Windows。
 - `standard`：`客户端 -> HAProxy/Envoy -> HighWall -> 上游`，HAProxy 负责 TLS、HTTP/2、WebSocket 和真实 IP 清洗；L4Wall 作为连接级控制面。部署骨架见 [`deploy/standard/`](deploy/standard/README.md)。
+- `native B+D-4`：TCP 走 `客户端 -> L4Wall -> PROXY v2 -> 原生 TLS/H1/H2 -> 上游`；UDP 走 `客户端 -> 原生 QUIC/H3 -> 上游`。H3 当前不经过 L4Wall，必须在网络层单独收紧 UDP 来源。
 
 上线前必须读 [docs/STACK.md](docs/STACK.md)，重点确认：HighWall 和上游没有公网端口、L4Wall 管理面只回环、客户端转发头会被边缘删除并重写、直连 HighWall/上游在攻击者视角下不可达。L4Wall 已实现可选的 Redis 共享封禁读取端；自动发布端、Controller 和多节点 HA 仍在后续里程碑，不能把标准骨架当成完整控制面。
+
+## L5/H2/H3 与原生 B+D-4
+
+原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前版本 `0.1.0-dev.0`。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。
+
+当前 H1/H2/H3 按 C3 声明，C4 尚未声明：标准 JA3/JA4、真实 WebSocket 端到端、QPACK 阻塞、流式背压饱和和部分 slow-flow 攻击仍属未覆盖项。精确 IP 封禁、Safe Ops 只读预演和独立 L5Wall `0.2.0` 也已落地；L5Wall 仍为 C1，提供 TLS 终止、会话策略和有界 H1 回环桥接。Safe Ops 还没有执行器，R2/R3 保持默认拒绝。
+
+能力是否成立以 C0-C4 等级和测试门槛为准，不能把协议透传当作完整检查。启用 HAProxy/Envoy 终止 TLS 时，必须明确它是否导致真实客户端 JA3/JA4 丢失。
+
+L5 已按 L4Wall 的方式独立为 [`subprojects/l5wall`](subprojects/l5wall/README.md)，当前版本 `0.2.0`、覆盖等级 C1，拥有独立测试、配置检查、回环 `serve` 桥接和威胁模型；原生核心内另有一套共享策略目标的 L5/L7 实现，L5Wall 子项目继续独立演进，不被它替代。
+
+DSH 子系统 AI Agent 已完成首轮独立验收：0 Critical、0 High、3 Medium、8 Low、3 信息项。r2/r3、r5 和 r6 定向复测随后完成；r5 的 8 个指定项中 7 项定向关闭（HWA-01/02/03/07/08/09/10），HWA-11 随后在 r6 窄范围独立复测中关闭，线路级 400 + 270、失败回退、上游零命中和审计不泄漏均通过；HWA-04/05/06 本轮未复测。运行进程映像仍无独立取证，H3/UDP 仍绕过 L4Wall，完整生产准入未完成。证据、逐项边界和残余风险见 [docs/DSH-R6-RESULTS-20261101.md](docs/DSH-R6-RESULTS-20261101.md)、[docs/DSH-R5-RESULTS-20261101.md](docs/DSH-R5-RESULTS-20261101.md) 与 [docs/DSH-REMEDIATION-20261101.md](docs/DSH-REMEDIATION-20261101.md)；完整验收范围见 [docs/DSH-SECURITY-ACCEPTANCE.md](docs/DSH-SECURITY-ACCEPTANCE.md)。r5/r6 可以支持人工发布评审，但不等于生产准入，DSH 对生产发布仍建议 no push；本次公开源码和脱敏测试记录已获单独授权。
 
 ## 架构
 
@@ -405,6 +422,8 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 ## 容器镜像
 
+Docker 镜像和 Compose 是**可选的交付方式**，不是运行、测试或 DSH 验收的前置条件。当前可以直接使用 Rust/Python 原生可执行文件完成本地和隔离靶场验证；只有需要容器隔离、统一打包或多节点编排时才需要 Docker。Docker daemon 不可用不应阻塞原生链路，也不应通过恢复出厂设置来“修复”它。
+
 版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.11.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0)。`0.11.0` 镜像随 tag 发布，并带有 cosign 签名和 GitHub provenance attestation；更早的 `0.9.0` 镜像没有这些证明，不能反向声称已签名。
 
 ```bash
@@ -451,6 +470,17 @@ cosign verify ghcr.io/fallen-leaves089/highwall:0.11.0 \
   --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+### 原生 B+D-4 镜像
+
+上面的 Python 镜像只包含 Python H1 基线，不包含 Rust 原生核心或 vendored `h3`；不能把它称为完整 B+D-4 镜像。原生核心使用独立的 `Dockerfile.native` 构建，镜像以 UID `10001` 非 root 运行，入口是 `highwall-native-core`，不会自动启动 L4Wall：
+
+```bash
+docker build --file Dockerfile.native --tag highwall-native-core:dev .
+docker run --rm highwall-native-core:dev --version
+```
+
+当前版本尚未发布 GHCR 原生镜像，也没有在本机完成 Docker 构建验证（Docker daemon 未运行）。Docker 只是可选打包层；没有 Docker 时仍可直接运行原生可执行文件。正式部署时，只读挂载配置、证书和私钥，并给审计目录单独的持久卷；挂载私钥的 UID 和权限必须满足 `tls.require_private_key_permissions`，否则原生核心会拒绝启动。H3/UDP 不经过 L4Wall，网络层还必须单独只放行授权 UDP 来源。
 
 ## 配置要点
 
@@ -507,6 +537,29 @@ python -m highwall diff -c config.json --candidate config.next.json --json
 
 安全降级包括关闭 WAF/DLP/限流/只读、关闭 TLS 或降低最低 TLS 版本、扩大 Host/方法/路径/CIDR/Origin 白名单、移除安全头或完整性钉扎、弱化威胁遏制模式，以及放宽路由方法、来源、请求体、并发或限速限制。上游目标、管理面启用、TLS 证书/私钥路径和审计路径变化会进入非阻断的 `security_review`，仍需人工确认。`diff` 是变更审阅工具，不是“配置已无漏洞”的证明。
 
+## Safe Ops 只读预演
+
+`highwall ops preview` 读取一份类型化 JSON 计划，只做策略判断和目标规范化，不执行任何操作。R0 只读动作允许通过；R1 必须显式 `dry_run`；R2 可回滚破坏性动作默认拒绝；R3 删除、格式化、改防火墙、删证书/备份和原始 shell 默认拒绝，并要求离线 break-glass 与双人批准。当前版本没有执行器，所以“通过预演”也不等于已执行。
+
+```json
+{
+  "action": "dry_run_config",
+  "targets": ["D:\\HighWall\\config.next.json"],
+  "environment": "production",
+  "dry_run": true
+}
+```
+
+```powershell
+python -m highwall ops preview --plan plan.json --allow-root D:\HighWall --json
+```
+
+允许返回 `0`，拒绝返回 `4`，计划格式错误返回 `2`。路径必须是绝对路径、位于显式 `--allow-root` 内，并拒绝通配符、环境变量、父目录穿越、UNC/设备路径、符号链接和 Windows reparse point。预演不能消除执行时的 TOCTOU；将来执行器必须在变更前重新校验路径、目标 ID 和计划哈希。
+
+## 协议覆盖清单
+
+`highwall capabilities --json` 描述 **Python H1 基线**：当前 `http1` 为 C3；`tls` 为 C1；`http2`、`http3`、`websocket`、`grpc` 为 C0。它不代表原生 B+D-4 核心；原生 H1/H2/H3 当前按 C3 声明，L5Wall 子项目 0.2.0 也仍只声明 C1。C0/C1 不等于完整防护，无法在清单中声明的能力按未支持处理。
+
 ## 配置热加载与优雅停机
 
 HighWall 支持原子配置重载和排空停机。重载会先完整加载、校验新配置，并构建新的运行时和 TLS 上下文；任一步失败都会保留旧配置和旧连接，进程继续服务。
@@ -530,7 +583,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 **没有生成攻击者标记。** 只有 `confirmed` 会写入 `offenders.json`；`suspected` 只做限速或告警。检查请求是否达到 `score_threshold`、`confirm_score` 或 `confirm_after_seconds`，并确认 `offender_path` 对服务账户可写。标记是风险关联，不是认证或永久封禁。
 
-**正常用户被限速。** 指纹按来源 `/24` 或 `/64` 关联，共享 NAT、代理池、监控探针可能被连带影响。先在 `monitor` 模式观察，再调整阈值和槽位；必要时用路由 ACL 或来源例外把正常流量隔离出来。
+**正常用户被限速。** 行为检测和告警会保留来源 `/24`、`/64` 关联，但持久封禁键使用精确客户端地址与稳定形状，不会因为邻居被确认而自动封禁整个前缀。共享 NAT、代理池和监控探针仍可能各自触发限速；先在 `monitor` 模式观察，再调整阈值和槽位。
 
 **为什么 HighWall 不自动处理 DDoS。** 它只做 L7 信号检测和告警；带宽型 L3/L4 DDoS、SYN flood 和清洗必须在 CDN、运营商或清洗中心完成。主机或链路饱和时 HighWall 可能先失联，因此外部心跳监控是必需的。
 
@@ -593,11 +646,35 @@ python -m scripts.benchmark_proxy --json
 
 脚本分别测量直连上游、经 HighWall 的允许请求和 WAF 拦截请求，输出 p50/p95/p99 与吞吐。数字会受当前机器负载、审计落盘、DLP/WAF 规则和 Python 版本影响，只能作为同机回归基线，不是容量 SLA 或采购承诺。
 
-当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、攻击者指纹/标记/慢速槽位、DDoS 状态机、告警去重与队列背压、管理面、配置生成/覆盖规则、配置 diff 的重启/安全降级分类与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证 TLS 指纹关联、确认后慢速响应、上游零转发、审计落盘、漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
+当前测试套件覆盖严格解析、路径参数/尾随点绕过、大小写路由绕过、请求编码、WAF 绕过矩阵、DLP（二进制/UTF-16/响应头/Set-Cookie 误报）、路由限速、HSTS、审计脱敏、路由策略、只读、响应钉扎、熔断状态机、在途/路由并发背压、自定义蜜罐、首击封禁、精确 IP 封禁键与 `/24` 关联隔离、攻击者指纹/标记/慢速槽位、DDoS 状态机、告警去重与队列背压、管理面、Safe Ops 只读预演与路径拒绝、协议覆盖清单、配置生成/覆盖规则、配置 diff 的重启/安全降级分类与宿主审计脚本。Windows 集成测试会真实启动回环网关，验证 TLS 指纹关联、确认后慢速响应、上游零转发、审计落盘、漂移检测、重配备份和停止流程；不修改防火墙、端口转发或外部服务。
+
+L5Wall 子项目另有独立的真实回环 TLS 握手测试、SNI/ALPN/mTLS/最低版本策略测试和配置拒绝测试：
+
+```powershell
+cd subprojects/l5wall
+python -m unittest discover -s tests -v
+```
+
+原生核心使用 Rust 工具链独立验证。`cargo test --all-targets --locked` 当前 143 项通过，覆盖真实 TCP/TLS/QUIC/H1/H2/H3 监听器、PROXY v2、Retry、未知 ALPN、0-RTT、连接迁移、WAF/DLP、gRPC/trailers 和资源预算：
+
+```powershell
+cd subprojects/native-core
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo build --release --locked
+```
+
+真实 L4Wall 到原生核心的串联测试默认跳过，构建出 release 二进制后显式开启：
+
+```powershell
+$env:HIGHWALL_RUN_NATIVE_CHAIN='1'
+python -m unittest tests.test_native_chain -v
+```
 
 跨层回环攻防验收位于 `tests/test_attack_defense.py`：真实 TCP 串联 L4Wall、HighWall 和模拟上游，覆盖 L4 封禁/限速/超时、共享封禁故障隔离、L7 Host/走私/穿越/WAF/DLP/CSRF/XFF，以及直连 HighWall/上游的绕过边界。完整矩阵、实测结果和未验证项见 [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md)。
 
-GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.12 上执行 Ruff、mypy、覆盖率与完整测试；CodeQL 每周和每次 PR 扫描；Dependabot 每周检查 Actions、Python 开发依赖和 Docker 基础镜像。所有第三方 Actions 固定到提交 SHA，发布镜像附带 SBOM、provenance、cosign 签名和 GitHub attestation。
+GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.14 上执行 Ruff、mypy、覆盖率与完整测试；CodeQL 每周和每次 PR 扫描；Dependabot 每周检查 Actions、Python 开发依赖和 Docker 基础镜像。所有第三方 Actions 固定到提交 SHA，发布镜像附带 SBOM、provenance、cosign 签名和 GitHub attestation。
 
 ## 开源许可
 

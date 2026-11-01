@@ -138,6 +138,7 @@ class ListenerConfig:
     new_connections_per_second: float
     new_connections_burst: int
     read_chunk_bytes: int
+    send_proxy_v2: bool
 
 
 @dataclass(frozen=True)
@@ -243,6 +244,7 @@ _LISTENER_KEYS = {
     "new_connections_per_second",
     "new_connections_burst",
     "read_chunk_bytes",
+    "send_proxy_v2",
 }
 _THREAT_KEYS = {
     "enabled",
@@ -387,6 +389,7 @@ def _parse_listener(raw: Any, server: ServerConfig, index: int) -> ListenerConfi
         read_chunk_bytes=_int(
             data.get("read_chunk_bytes"), f"{where}.read_chunk_bytes", 65536, minimum=512, maximum=1024 * 1024
         ),
+        send_proxy_v2=_bool(data.get("send_proxy_v2"), f"{where}.send_proxy_v2", False),
     )
 
 
@@ -703,6 +706,7 @@ def config_to_dict(config: GatewayConfig) -> dict[str, Any]:
                 "new_connections_per_second": listener.new_connections_per_second,
                 "new_connections_burst": listener.new_connections_burst,
                 "read_chunk_bytes": listener.read_chunk_bytes,
+                "send_proxy_v2": listener.send_proxy_v2,
             }
             for listener in config.listeners
         ],
@@ -784,6 +788,7 @@ def example_config() -> dict[str, Any]:
         "new_connections_per_second": 10.0,
         "new_connections_burst": 20,
         "read_chunk_bytes": 65536,
+        "send_proxy_v2": False,
     }
     api = dict(listener)
     api.update({"name": "api", "listen_port": 18081, "upstream_port": 18083})

@@ -1,16 +1,19 @@
-# HighWall + L4Wall 复合部署基线
+# HighWall 复合部署基线（B 过渡与 B+D-4 原生）
 
-本文是 B 方案的实施基线：**HAProxy/Envoy 做数据面，L4Wall 做连接级策略控制面，HighWall 继续做 HTTP/1.1 L7 防护**。它描述信任边界、入口、真实客户端 IP、直连封堵、封禁同步、故障策略和验收方法。
+本文同时描述两条可部署路径：**B 过渡基线**由 HAProxy/Envoy 做数据面、L4Wall 做连接级策略控制面、Python HighWall 做 HTTP/1.1 L7 防护；**B+D-4 原生基线**由 L4Wall 处理 TCP 连接准入，PROXY v2 传递真实来源，Rust 原生核心统一处理 TLS/QUIC 与 H1/H2/H3。两条路径都要求明确信任边界、入口、直连封堵、故障策略和攻击者视角验收。
 
 这不是第三方审计报告，也不是“绝对无漏”的承诺。目标是让每个入口都有归属、有默认拒绝、有审计、有验证，避免“以为覆盖了、实际可绕过”的路径。
 
+> B 过渡基线仍适用于 Python H1 的快速部署；“HighWall 不重写”只适用于该路径，不是最终架构约束。L5 深度、H2/H3/WebSocket/gRPC 覆盖和原生核心的实现状态以 [GUARDRAIL-ARCHITECTURE.md](GUARDRAIL-ARCHITECTURE.md) 为准。
+
 ## 1. 结论
 
-- 标准生产形态面向 Linux/容器；Windows 和小规模继续使用 L4Wall `lite`。
-- HighWall 不重写。HTTP/2、TLS、WebSocket 由边缘代理处理；需要检查的 HTTP 流量归一化成 HTTP/1.1 后交给 HighWall。
+- B 过渡形态面向 Linux/容器；Windows 和小规模可继续使用 L4Wall `lite` 加 Python H1。
+- B 过渡形态中 Python HighWall 不重写。HTTP/2、TLS、WebSocket 由边缘代理处理；需要检查的 HTTP 流量归一化成 HTTP/1.1 后交给 HighWall。
+- B+D-4 原生形态中，Rust 核心自行终止 TLS/QUIC 并检查 H1/H2/H3；TCP 可由 L4Wall 发送 PROXY v2，UDP/H3 当前直达原生 QUIC listener。
 - L4Wall 在标准形态中**不应有公网数据口**；它读连接日志和指标，做评分、封禁和审计，通过数据面接口下发策略。
 - 所有真实客户端 IP 只能由可信边缘写入；客户端自带的转发头一律丢弃。
-- 上游只允许 HighWall 访问，HighWall 只允许边缘代理访问。
+- 上游只允许数据面网关访问；Python HighWall 只允许边缘代理访问，原生核心只允许 L4Wall 或选定的 QUIC 来源访问。
 
 入口：轻量形态见 [L4Wall README](../subprojects/l4wall/README.md)，标准部署骨架见 [deploy/standard/README.md](../deploy/standard/README.md)。
 
@@ -27,7 +30,7 @@
 ## 3. 非目标
 
 - 带宽型 DDoS、SYN flood、运营商侧拥塞；
-- UDP、QUIC/HTTP3；
+- B 过渡形态不处理 UDP、QUIC/HTTP3；B+D-4 原生形态支持 H3，但当前 TCP 和 UDP 是两条独立入口；
 - 多租户全局调度、跨地域 Anycast；
 - 全量 WebSocket 消息内容检查；
 - 替代应用认证、授权、会话安全和主机 EDR；
@@ -62,12 +65,29 @@ L4Wall Controller
   SQLite WAL（单机）或 Redis（多机）
 ```
 
+B+D-4 原生形态：
+
+```text
+TCP 客户端
+  -> L4Wall（来源 ACL、并发、速率、首字节、字节上限）
+  -> PROXY v2（真实来源）
+  -> 原生核心（TLS、H1/H2、WAF/DLP、限速、封禁、审计）
+  -> 上游
+
+UDP 客户端
+  -> 原生核心 QUIC/H3（Retry、精确来源 ACL、流/请求预算、WAF/DLP、审计）
+  -> 上游
+```
+
 信任规则：
 
 - 边缘代理是唯一可信的客户端 IP 来源。
-- HighWall 只信任边缘代理的转发头，不信任客户端直接提交的转发头。
+- Python HighWall 只信任边缘代理的转发头；原生核心只信任 `proxy_protocol.trusted_proxy_networks` 中 peer 发来的 PROXY v2 头。
+- 客户端直接提交的 `X-Forwarded-For`、`Forwarded`、`X-Real-IP` 和 PROXY v2 头都不能建立可信来源。
 - L4Wall 管理面只信任回环或专用管理网。
 - 上游不信任公网，只信任 HighWall。
+
+L5 边界：`standard` 中由 HAProxy/Envoy 终止 TLS 时，后面的组件拿不到真实 ClientHello，不能声称拥有完整 JA3/JA4 或 L5 指纹。`l5wall serve` 0.2.0 是独立的回环 H1 桥接，当前只接受 `http/1.1` ALPN，仍是 C1；它不提供 H2/H3 检查，也不能替代 B+D-4 原生核心。该回环桥接不传递原始客户端 IP，不能在其后启用按 IP 封禁、来源 ACL 或依赖真实来源的限速。原生核心能保留 TCP peer 来源并验证 PROXY v2，也有自己的 TLS/QUIC 策略，但标准 JA3/JA4 仍未声明。
 
 ## 5. 部署形态
 
@@ -75,6 +95,7 @@ L4Wall Controller
 |---|---|---|---|---|
 | `lite` | Python L4Wall 直接转发 | L4Wall 自身 | 单机、小规模、Windows | 已实现并通过测试 |
 | `standard` | HAProxy/Envoy | L4Wall Controller | Linux/容器、单机或小集群 | 部署骨架已提供，控制面待接入 |
+| `native B+D-4` | L4Wall + Rust 原生核心 | 当前本地封禁；单写者 Controller 待接入 | 需要 TLS/QUIC、H1/H2/H3 的入口 | 已可独立运行并通过本地/串联回归；DSH r5 为 0 Critical/0 High，8 项中 7 项定向关闭；HWA-11 在 r6 窄范围定向关闭，完整验收未完成 |
 | `scale` | Envoy/Kubernetes | L4Wall Controller + 共享状态 | 多节点、水平扩展 | 后续里程碑 |
 
 `standard` 的第一阶段只保证：边缘入口、真实 IP、网络闭环、L7 防护和验收脚本。L4Wall 的 Redis 共享封禁**读取端**已经实现，但 Controller、自动发布和动态封禁下发仍属于下一阶段，不能把当前骨架当成完整控制面。
@@ -100,6 +121,17 @@ L4Wall Controller
 | 上游 | `172.31.0.30:18080` | 否 | `internal` 网络，只允许 HighWall 访问 |
 | HAProxy 管理 socket | `/var/run/haproxy/admin.sock` | 否 | 仅容器/本机管理 |
 
+### native B+D-4
+
+| 入口 | 示例地址 | 是否发布 | 说明 |
+|---|---|---|---|
+| L4Wall TCP 数据面 | `0.0.0.0:18443` | 是 | 只发布 TCP；来源 ACL 必须显式配置 |
+| 原生 QUIC/H3 | `0.0.0.0:18443/udp` | 是 | 当前直达原生核心，不经过 L4Wall；必须单独限制 UDP 来源 |
+| 原生 TCP listener | `127.0.0.1:18444` | 否 | 只允许 L4Wall，要求 PROXY v2 |
+| 上游 | `127.0.0.1:18445` | 否 | 只允许原生核心访问 |
+
+示例端口用于说明分叉，不代表固定默认值。生产必须根据实际监听器和防火墙规则逐项核对；如果只有应用层来源白名单而没有主机防火墙或安全组，不能声称已经完成网络层封锁。
+
 硬规则：
 
 - 主机防火墙或云安全组只放行边缘端口。
@@ -121,6 +153,13 @@ HighWall 侧：
 - `policy.max_xff_hops` 设为实际代理跳数，不要放宽到无界；
 - `policy.allowed_client_networks` 检查的是**解析后的客户端 IP**，不是 HAProxy 的 peer 地址。不要把它填成 HAProxy 的 `/32`，否则所有真实客户端都会被拒绝。
 - 客户端直连 HighWall 时，peer 不在 `trusted_proxies` 中，XFF 不会被采信；但网络层仍必须禁止直连。
+
+B+D-4 原生形态：
+
+- L4Wall 的 listener 设置 `send_proxy_v2=true`，把真实 TCP 来源写入标准 PROXY v2 头；
+- 原生核心设置 `listen.proxy_protocol.mode=required`，`trusted_proxy_networks` 只填 L4Wall 的确切地址或最小网段；
+- 不受信 peer、缺失头、非法版本和超时都会拒绝，客户端不能靠伪造 PROXY v2 头改变来源；
+- UDP/H3 没有 PROXY v2 路径，原生核心直接看到 UDP peer，必须同时使用 `quic.allowed_client_networks` 和主机防火墙/安全组收紧来源。
 
 注意：`highwall check --strict` 会把非空 `trusted_proxies` 判为高风险并返回 4。这是预期的强制复核，不是配置错误；只有确认 HighWall 只被该边缘地址访问后才允许晋级。
 
@@ -153,6 +192,9 @@ X-Forwarded-For: 203.0.113.9
 - 直连 HighWall 会绕过边缘的 TLS、HTTP/2、XFF 清洗和连接限速；
 - 直连上游会绕过全部 L7 策略；
 - 两者都必须在网络层拒绝，而不是只靠应用层提示。
+- 直连原生 TCP listener 会绕过 L4Wall 的连接准入；即使 PROXY v2 `required` 能拒绝无头连接，也仍要保证只有 L4Wall 网络可达。
+- 直连原生 QUIC listener 是当前 H3 的预期入口，不经过 L4Wall；QUIC 来源 ACL 只解决应用层准入，不能替代防火墙。
+- 当前 TCP/UDP 防护不对称：H1/H2 在 L4Wall 后，H3 直达原生核心。发布说明、监控和攻击面清单必须明确写出这一点。
 
 推荐验证：
 
@@ -169,6 +211,7 @@ X-Forwarded-For: 203.0.113.9
 - L4Wall 已提供可选的私网 Redis 共享封禁**读取端**：后台拉取版本化 JSON，只增量合并，故障不进入数据面。
 - L4Wall 尚未提供本地封禁自动发布、冲突合并和 Controller；当前部署骨架仍不包含这些控制面组件。
 - HighWall 的 L7 封禁仍独立保存，尚未与 L4Wall 共享集合自动合并。
+- 原生核心当前使用进程内精确 IP 封禁表，带 TTL 和容量上限；重启清空，尚未接入单写者持久状态服务。
 
 已实现的读取端不变量：
 
@@ -208,6 +251,7 @@ Controller 不应成为新的公网入口。它的输入是可信边缘产生的
 
 - HighWall 生成 `request_id`，写 JSONL 审计；
 - L4Wall 写连接级 JSONL 审计，包含 listener、来源、决策、信号和原因。
+- 原生核心写请求和连接级 JSONL 审计，包含协议、ALPN、规则 ID、决策、上游结果和关键资源信号；审计失败默认关闭。
 
 尚未完成：
 
@@ -226,6 +270,9 @@ Controller 不应成为新的公网入口。它的输入是可信边缘产生的
 | L4Wall Controller 不可用 | 已有规则继续生效，新封禁停止 | 告警，保留最后已知策略 |
 | 共享状态不可用 | 保留最后已知封禁，停止新策略 | 告警，不要清空封禁 |
 | 审计盘满 | HighWall/L4Wall 失败关闭 | 扩容、轮转、恢复后验证 |
+| 原生审计写入失败 | 默认失败关闭，拒绝继续放行 | 恢复写入路径；不要关闭 `fail_closed` 绕过 |
+| PROXY v2 不可用或来源不受信 | 原生核心拒绝连接 | 修复 L4Wall/PROXY 配置；不要把受信网段放宽到全网 |
+| UDP/H3 来源超出 ACL | QUIC 在握手前忽略或拒绝 | 同步收紧 `quic.allowed_client_networks` 和主机防火墙 |
 | 配置错误 | 拒绝启动或热加载拒绝 | 保留旧配置，回滚 |
 | 证书过期 | TLS 握手失败 | 监控到期时间，提前轮换 |
 
@@ -244,11 +291,14 @@ Controller 不应成为新的公网入口。它的输入是可信边缘产生的
 - [ ] 证书有效期和轮换流程已验证。
 - [ ] 封禁默认精确 IP，聚合前缀有业务依据。
 - [ ] 旁路、伪造 XFF、直连 HighWall/上游测试通过。
+- [ ] L4Wall `send_proxy_v2` 与原生核心 `proxy_protocol.mode=required` 的真实来源链通过。
+- [ ] 原生 TCP listener 和上游在攻击者视角下不可直连；QUIC/UDP 来源由主机防火墙和 `quic.allowed_client_networks` 双重限制。
+- [ ] H3 绕过 L4Wall 的 TCP/UDP 不对称已被监控、告警和发布说明明确记录。
 - [ ] 并发、PPS、p99 延迟基线已记录。
 
 ## 13. 攻击者视角验收
 
-标准骨架：
+标准骨架（可选，Docker）：
 
 ```powershell
 cd deploy/standard
@@ -283,13 +333,45 @@ python scripts/demo.py
 python -m l4wall check --config config.example.json
 ```
 
+原生 B+D-4：
+
+```powershell
+cd subprojects/native-core
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo build --release --locked
+
+cd ../../
+$env:HIGHWALL_RUN_NATIVE_CHAIN='1'
+python -m unittest tests.test_native_chain -v
+```
+
+真实串联测试要求已经构建 release 二进制；它验证 L4Wall 发送 PROXY v2 后，原生核心能恢复真实来源并完成到上游的请求。普通测试矩阵默认跳过该用例。
+
+原生核心的容器发布是可选打包层，与 Python 镜像分开：
+
+```bash
+docker build --file Dockerfile.native --tag highwall-native-core:dev .
+docker run --rm highwall-native-core:dev --version
+```
+
+Python `Dockerfile` 只包含 Python H1 基线；`Dockerfile.native` 才包含 Rust 核心和 vendored `h3`。当前环境没有 Docker daemon，两种真实容器拓扑都未运行验证，原生镜像也未发布。Windows 部署还必须显式创建并验证 TCP 和 UDP 入站规则：自动防火墙规则可能绑定二进制绝对路径，本轮已验证 `target/release-verify/release` 的 UDP 被 Block，而规范路径 `target/release` 的 UDP 正常。
+
 ## 14. 当前实现状态
 
 | 能力 | 状态 | 说明 |
 |---|---|---|
-| L4Wall lite | 已实现 | 65 个测试、演示、配置校验通过 |
+| L4Wall lite | 已实现 | 71 个测试、演示、配置校验通过 |
 | L4+L7 回环攻防验收 | 已实现 | 26 项端到端测试；真实 TCP 串联 L4Wall/HighWall/模拟上游 |
-| 标准拓扑攻防验收 | 未验证 | Docker daemon 不可用；未做容器、HAProxy、TLS、HTTP/2、WebSocket |
+| 原生 B+D-4 数据面 | 已实现 | Rust 143 项测试通过；真实 TCP/UDP 监听器、TLS/QUIC、H1/H2/H3、PROXY v2、Retry、未知 ALPN、0-RTT、迁移和 ACL 有覆盖 |
+| 原生独立镜像 | 已定义，未构建验证 | `Dockerfile.native` 多阶段构建、非 root；当前 Docker daemon 不可用，未本地验证，也未发布 GHCR |
+| L4Wall→原生核心真实串联 | 已实现 | 显式开启后 1 项通过；验证 PROXY v2 真实来源链 |
+| 根 Python 回归与覆盖率 | 已实现 | 全量回归通过；原生真实串联默认跳过，显式开启后单独通过；分支覆盖率 81% |
+| L5Wall 子项目 | 已实现 C1 | 34 个测试通过；回环 H1 桥接，不声明 H2/H3 |
+| H2/H3/WebSocket/gRPC | 原生 C3，部分 C4 未覆盖 | H1/H2/H3 请求/响应、有界正文、压缩、trailers 和 gRPC 有测试；r5 定向关闭 HWA-08/09/10，r6 在窄范围关闭 HWA-11；真实 WebSocket 端到端、QPACK 阻塞和流式背压饱和仍待补 |
+| 标准容器拓扑攻防验收 | 未验证 | Docker daemon 不可用；未做容器、HAProxy、TLS、HTTP/2、WebSocket 的真实拓扑 |
+| DSH 独立安全验收 | r5/r6 定向关闭 8/8，完整验收未完成 | 首轮 0 Critical / 0 High / 3 Medium / 8 Low / 3 信息项；r5 的 HWA-01/02/03/07/08/09/10 定向关闭，HWA-11 在 r6 窄范围关闭；HWA-04/05/06 未在 r5/r6 复测；H3 绕过 L4Wall、封禁后握手成本、完整 WS/gRPC/流控/管理面等仍未关闭 |
 | L4Wall 子项目迁移 | 已完成 | `subprojects/l4wall` |
 | 标准部署骨架 | 已提供 | Docker Compose/HAProxy/HighWall 示例；当前环境无 Docker daemon，未做容器级运行验证 |
 | 真实 IP 清洗配置 | 已提供 | HAProxy 删除并重写 XFF |
@@ -298,13 +380,13 @@ python -m l4wall check --config config.example.json
 | L4Wall 共享封禁发布端 | 待实现 | 本地封禁自动发布、跨节点冲突合并 |
 | L4Wall Controller | 待实现 | 评分、封禁下发、控制面 |
 | 跨层关联 ID | 待实现 | 需要 HighWall 记录边缘请求 ID |
-| HTTP/2/WebSocket 检查 | 部分 | 边缘可承接；HighWall 不检查 WebSocket 内容 |
+| HTTP/2/WebSocket 检查 | 原生部分覆盖 | 原生核心可承接 H1 WebSocket 和 H2；Python HighWall 不检查 WebSocket 内容 |
 | 多节点/HA | 待实现 | 需要共享状态和 VIP/编排 |
 
 ## 15. 演进路线
 
-- P0：本文、子项目迁移、标准部署骨架、真实 IP、旁路验证、CI。
-- P1：L4Wall 共享封禁发布端、L4Wall Controller、HAProxy 动态 deny map、跨层关联 ID。
-- P2：多节点、Kubernetes/Envoy、OpenTelemetry、云清洗接入、故障演练。
+- P0：已完成的配置前置检查、子项目边界、真实 IP 验证和旁路验收。
+- P1：已完成的 L4Wall 串联、PROXY v2、原生 TLS/QUIC 与 H1/H2/H3 数据面、C3 覆盖和本地回归。
+- P2：完成其余 DSH 残余项的书面风险接受/复核、QPACK/放大/慢流控预算、单写者持久封禁、Controller、多节点状态与真实容器拓扑验收；HWA-11 在后续代码变更后需回归。
 
 任何阶段都不要把“尚未验证”写成“已覆盖”。如果某个入口没有网络层拒绝、没有审计、没有攻击者视角测试，就仍然按未覆盖处理。

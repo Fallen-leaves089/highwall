@@ -420,7 +420,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 - [ ] 单 IP 超过并发上限时返回 503；累计违规达到阈值后临时返回 429，窗口/时长符合配置。
 - [ ] 路由 `rate`/`rate_burst` 超限返回 429 和 `Retry-After`，且未命中路由的流量不受该路由桶影响。
 - [ ] 一个客户端停在 TLS 握手阶段时，其他客户端仍能完成 TLS 请求；握手超时/失败后连接和 IP 槽位可复用，`tls_handshake_failures_total` 增加。
-- [ ] `Transfer-Encoding`、重复 `Content-Length`、Upgrade 被拒绝。
+- [ ] Python 代理路径拒绝 `Transfer-Encoding`；原生 H1 路径中单个合法 `chunked` 被解块并按显式长度重框定，而重复/组合 TE、TE+CL、Trailer 和 Upgrade 被拒绝。
 - [ ] 慢头和慢上游能按期限超时。
 - [ ] 管理面从非 loopback 不可达。
 - [ ] 审计不包含 Cookie/Authorization/查询串/body；`redact` 能遮盖敏感路径，`exact` 仅在明确选择时使用。

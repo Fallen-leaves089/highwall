@@ -157,7 +157,7 @@ redis-cli -h 172.31.0.40 SET l4wall:bans:v1 $json
 
 - L4Wall 的 `upstream_host/upstream_port` 指向 HighWall；
 - 网络层只允许 L4Wall 访问 HighWall；不要把 `policy.allowed_client_networks` 误填成 L4Wall 的 `/32`，它检查的是 HighWall 解析后的客户端 IP；
-- L4Wall 是透明 TCP 转发，不会自动写 PROXY protocol 或 `X-Forwarded-For`；需要按真实客户端做 L7 策略时，使用 [复合部署基线](../../../docs/STACK.md) 的 `standard` 形态；
+- L4Wall 默认是透明 TCP 转发。设置 `send_proxy_v2=true` 后会写标准 PROXY v2 TCP header，但不会写 `X-Forwarded-For`；只能接明确支持 PROXY v2 的上游，例如配置为 `proxy_protocol.mode=required` 的原生核心。Python HighWall 不解析该头，不能直接接在这种模式后面；
 - HighWall 的 `allowed_hosts` 仍按业务域名配置；
 - 两层审计目前按时间戳、listener 名和来源 IP 近似关联，尚无跨层精确关联 ID；
 - L4Wall 不替代 HighWall 的 Host/WAF/DLP/响应完整性策略。

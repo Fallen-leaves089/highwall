@@ -23,7 +23,7 @@ HighWall 当前源码与最新发布版本均为 `0.11.0`。只有最新发布�
 HighWall 尝试维持以下不变量：
 
 - **默认拒绝**：未知配置键、无 Host、未允许的方法或路径、没有合法 Content-Type 的请求体都不会转发。
-- **单一解析路径**：请求由自己的严格解析器读取，不把模糊的 framing 交给上游；不接受 Transfer-Encoding、Trailer、Expect、Upgrade、编码请求体。带 body 的请求只接受 UTF-8/ASCII charset，并拒绝 UTF-16 BOM、NUL 字节和其他歧义编码。
+- **单一解析路径**：请求由自己的严格解析器读取，不把模糊的 framing 交给上游。Python 代理路径要求显式 Content-Length 并拒绝 Transfer-Encoding；原生 H1 核心只接受单个合法 `chunked`，解块后按显式长度重新生成上游 framing。所有路径拒绝重复或组合 TE、TE+CL、Trailer、Expect、Upgrade 和编码请求体。带 body 的请求只接受 UTF-8/ASCII charset，并拒绝 UTF-16 BOM、NUL 字节和其他歧义编码。
 - **唯一 authority**：Host 先 canonicalize，再做精确 allowlist 匹配。
 - **路径唯一解释**：路径经过严格解码、NFKC 和点段检查；默认拒绝分号路径参数、尾随点和尾随空格。Host/来源 ACL 先执行；路由、只读判断和完整性钉扎使用规范化路径，并以大小写不敏感方式比较；上游目标保留原始查询串语义。
 - **有界资源**：连接数、头/行/体/响应体、上游总时限、配置大小与 JSON 嵌套深度、审计文件大小和客户端表都有上限。

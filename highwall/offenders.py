@@ -47,6 +47,8 @@ class OffenderRecord:
     action: str
     source_prefix: str = ""
     client_ip: str = ""
+    correlation_fingerprint: str = ""
+    ban_scope: str = "legacy_prefix"
 
     def as_public(self, *, include_client_ip: bool = False) -> dict[str, Any]:
         data = asdict(self)
@@ -82,6 +84,8 @@ def _parse_record(value: Any) -> OffenderRecord:
         "action",
         "source_prefix",
         "client_ip",
+        "correlation_fingerprint",
+        "ban_scope",
     }
     if set(value) - allowed:
         raise ConfigError("offender state contains unknown fields")
@@ -98,6 +102,8 @@ def _parse_record(value: Any) -> OffenderRecord:
         action = str(value["action"])
         source_prefix = str(value.get("source_prefix", ""))
         client_ip = str(value.get("client_ip", ""))
+        correlation = str(value.get("correlation_fingerprint", fingerprint))
+        ban_scope = str(value.get("ban_scope", "legacy_prefix"))
     except (KeyError, TypeError, ValueError) as exc:
         raise ConfigError("offender state contains an invalid record") from exc
     if len(fingerprint) != 32 or any(ch not in "0123456789abcdef" for ch in fingerprint):
@@ -112,6 +118,10 @@ def _parse_record(value: Any) -> OffenderRecord:
         raise ConfigError("offender state contains an out-of-range counter")
     if action not in {"monitor", "throttle", "tarpit", "block"}:
         raise ConfigError("offender state contains an invalid action")
+    if len(correlation) != 32 or any(ch not in "0123456789abcdef" for ch in correlation):
+        raise ConfigError("offender state contains an invalid correlation fingerprint")
+    if ban_scope not in {"exact_ip", "legacy_prefix"}:
+        raise ConfigError("offender state contains an invalid ban scope")
     return OffenderRecord(
         fingerprint=fingerprint,
         shape_fingerprint=shape,
@@ -126,6 +136,8 @@ def _parse_record(value: Any) -> OffenderRecord:
         action=action,
         source_prefix=source_prefix[:64],
         client_ip=client_ip[:64],
+        correlation_fingerprint=correlation,
+        ban_scope=ban_scope,
     )
 
 
@@ -244,7 +256,11 @@ class OffenderRegistry:
         with self._lock:
             self._prune(now)
             record = self._records.get(fingerprint)
-            if record is not None and record.expires_at > now:
+            if (
+                record is not None
+                and record.ban_scope == "exact_ip"
+                and record.expires_at > now
+            ):
                 return OffenderMatch(record=record, exact=True)
             for candidate in self._records.values():
                 if candidate.shape_fingerprint == shape_fingerprint_value and candidate.expires_at > now:
@@ -263,9 +279,19 @@ class OffenderRegistry:
         action: str,
         source_prefix_value: str = "",
         client_ip: str = "",
+        correlation_fingerprint_value: str = "",
     ) -> OffenderRecord:
         if tag not in _TAGS or confidence not in {"suspected", "confirmed"}:
             raise ValueError("invalid offender tag or confidence")
+        if len(fingerprint) != 32 or any(ch not in "0123456789abcdef" for ch in fingerprint):
+            raise ValueError("invalid offender fingerprint")
+        if len(shape_fingerprint_value) != 32 or any(
+            ch not in "0123456789abcdef" for ch in shape_fingerprint_value
+        ):
+            raise ValueError("invalid shape fingerprint")
+        correlation = correlation_fingerprint_value or fingerprint
+        if len(correlation) != 32 or any(ch not in "0123456789abcdef" for ch in correlation):
+            raise ValueError("invalid correlation fingerprint")
         now = self._clock()
         with self._lock:
             existing = self._records.get(fingerprint)
@@ -288,6 +314,8 @@ class OffenderRegistry:
                 action=action,
                 source_prefix=source_prefix_value[:64],
                 client_ip=client_ip[:64] if self.include_client_ip else "",
+                correlation_fingerprint=correlation,
+                ban_scope="exact_ip",
             )
             self._records[fingerprint] = record
             self._prune(now)

@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .config import DdosDetectionConfig, ThreatDetectionConfig
-from .fingerprint import request_fingerprint, source_prefix
+from .fingerprint import (
+    correlation_fingerprint,
+    correlation_fingerprint_from_shape,
+    request_fingerprint,
+    source_prefix,
+)
 from .metrics import Metrics
 from .offenders import OffenderMatch, OffenderRecord, OffenderRegistry
 from .protocol import RequestHead
@@ -62,6 +67,7 @@ class ThreatAssessment:
     ban_seconds: float = 0.0
     alert: dict[str, Any] | None = None
     offender: OffenderRecord | None = None
+    correlation_fingerprint: str = ""
 
 
 @dataclass
@@ -214,6 +220,7 @@ class ThreatDetector:
         delay_ms: int,
         hold_seconds: float,
         containment_until: float,
+        correlation_fingerprint_value: str,
         client_ip: str,
         request_id: str,
     ) -> dict[str, Any]:
@@ -226,6 +233,7 @@ class ThreatDetector:
             "severity": "high" if confidence == "confirmed" else "medium",
             "detected_at": _utc_iso(now_wall),
             "fingerprint": fingerprint,
+            "correlation_fingerprint": correlation_fingerprint_value,
             "shape_fingerprint": shape,
             "score": score,
             "confidence": confidence,
@@ -275,6 +283,7 @@ class ThreatDetector:
         *,
         fingerprint: str,
         shape: str,
+        correlation_fingerprint_value: str,
         client_ip: str,
         request_id: str,
         now: float,
@@ -346,6 +355,7 @@ class ThreatDetector:
             if self._alert_due(state, now, event):
                 alert = self._payload(
                     fingerprint=fingerprint,
+                    correlation_fingerprint_value=correlation_fingerprint_value,
                     shape=shape,
                     score=score,
                     confidence=confidence,
@@ -368,7 +378,7 @@ class ThreatDetector:
             or state.marked_confidence != "confirmed"
             or now - state.marked_at >= 60.0
         )
-        if should_mark:
+        if should_mark and fingerprint:
             state.marked_at = now
             state.marked_confidence = "confirmed"
             self.offenders.mark(
@@ -381,6 +391,7 @@ class ThreatDetector:
                 action=action,
                 source_prefix_value=source_prefix(client_ip),
                 client_ip=client_ip,
+                correlation_fingerprint_value=correlation_fingerprint_value,
             )
             self.metrics.set("offender_marks", float(self.offenders.size()))
 
@@ -403,6 +414,7 @@ class ThreatDetector:
             ban_seconds=max(1.0, retry_after) if ban_ip else 0.0,
             alert=alert,
             offender=exact_match.record if exact_match is not None else None,
+            correlation_fingerprint=correlation_fingerprint_value,
         )
 
     def assess(
@@ -414,6 +426,7 @@ class ThreatDetector:
         request_id: str = "",
     ) -> ThreatAssessment:
         fingerprint, shape = request_fingerprint(head, client_ip, tls_profile)
+        correlation, _ = correlation_fingerprint(head, client_ip, tls_profile)
         if not self.config.enabled:
             return ThreatAssessment(
                 fingerprint=fingerprint,
@@ -428,6 +441,7 @@ class ThreatDetector:
                 delay_ms=0,
                 hold_seconds=0.0,
                 retry_after=0.0,
+                correlation_fingerprint=correlation,
             )
         now = self._clock()
         with self._lock:
@@ -458,6 +472,7 @@ class ThreatDetector:
                 state,
                 fingerprint=fingerprint,
                 shape=shape,
+                correlation_fingerprint_value=correlation,
                 client_ip=client_ip,
                 request_id=request_id,
                 now=now,
@@ -472,12 +487,17 @@ class ThreatDetector:
         *,
         client_ip: str = "",
         request_id: str = "",
+        correlation_fingerprint_value: str = "",
     ) -> ThreatAssessment | None:
         if not self.config.enabled:
             return None
         if not (rule_id.startswith("HW-WAF-") or status in {400, 403, 405, 413, 414, 415, 417, 431}):
             return None
         now = self._clock()
+        correlation = correlation_fingerprint_value or correlation_fingerprint_from_shape(
+            client_ip,
+            shape,
+        )
         with self._lock:
             state = self._states.get(fingerprint)
             if state is None:
@@ -487,6 +507,7 @@ class ThreatDetector:
                 state,
                 fingerprint=fingerprint,
                 shape=shape,
+                correlation_fingerprint_value=correlation,
                 client_ip=client_ip,
                 request_id=request_id,
                 now=now,

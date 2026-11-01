@@ -4,11 +4,11 @@ English | [简体中文](README.md)
 
 [![CI](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml/badge.svg)](https://github.com/Fallen-leaves089/highwall/actions/workflows/ci.yml) [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE) [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](pyproject.toml)
 
-HighWall is a **fail-closed HTTP/1.1 application-layer reverse proxy and security gateway**. It uses only the Python standard library and aims to turn the parsing, policy, resource-limit, and audit decisions most prone to ambiguity at an application entry point into a small, auditable core.
+HighWall is a **fail-closed application-layer reverse proxy and security gateway**. It keeps a zero-dependency Python HTTP/1.1 baseline and also provides a Rust native B+D-4 data plane for TLS/QUIC and HTTP/1.1, HTTP/2, and HTTP/3. The goal is to make parsing, policy, resource limits, and audit decisions at the application entry point verifiable and regression-tested.
 
-Current source and latest published version: `0.11.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 added atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics; v0.10 added `highwall diff` preflight, CI lint/type/coverage gates, CodeQL, Dependabot, and signed/attested release images; v0.11 adds the standalone L4Wall connection-level protection subproject, a standard composite deployment skeleton, a reproducible live attack range, and tighter in-flight 503 auditing and release redaction checks. It is still not a production-grade product that has completed an independent third-party audit.
+Current source: `0.12.0.dev0` (unreleased); latest published version: `0.11.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 added atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics; v0.10 added `highwall diff` preflight, CI lint/type/coverage gates, CodeQL, Dependabot, and signed/attested release images; v0.11 added the standalone L4Wall connection-level protection subproject, a standard composite deployment skeleton, a reproducible live attack range, and tighter in-flight 503 auditing and release redaction checks; v0.12 adds exact-IP enforcement keys, read-only Safe Ops planning, a runtime capability manifest, the standalone L5Wall subproject, the L4Wall PROXY v2 source chain, and the Rust native B+D-4 data plane. The native core covers TLS/QUIC, H1/H2/H3, H1 WebSocket, H2/H3 gRPC, bounded-body WAF/DLP, and a QUIC client-network ACL; H1/H2/H3 are declared C3 and C4 still has uncovered items. DSH completed the first independent acceptance pass, an r5 directed retest, and an r6 narrow HWA-11 retest: 0 Critical, 0 High; seven of eight r5 scoped items closed, and HWA-11 subsequently closed in r6. Full production admission is not complete, so this is still not a product that has completed third-party audit or production admission.
 
-> **v0.11 focus**: L4Wall handles connection admission, rate limits, byte caps, and bans, while HighWall continues to handle HTTP/1.1 WAF/DLP. Deploy with the `lite` chain or the `standard` skeleton, and verify ingress ownership, direct-access blocking, and trusted client IPs using [docs/STACK.md](docs/STACK.md) before go-live.
+> **v0.12 focus**: L4Wall continues to handle TCP connection admission, rate limits, byte caps, and bans; the Python HighWall process remains the H1 baseline and policy toolkit; the Rust native B+D-4 data plane handles TLS/QUIC, H1/H2/H3, and bounded-body inspection. Before go-live, verify ingress ownership, direct-access blocking, trusted client IPs, and the TCP/UDP split using [docs/STACK.md](docs/STACK.md).
 
 ## Contents
 
@@ -19,6 +19,7 @@ Current source and latest published version: `0.11.0`. v0.3 expanded the protect
 - [L7 DDoS alerts and the 5-minute response window](#l7-ddos-alerts-and-the-5-minute-response-window)
 - [Enabling threat protection](#enabling-threat-protection)
 - [L4Wall subproject and composite deployment](#l4wall-subproject-and-composite-deployment)
+- [L5/H2/H3 architecture](#l5h2h3-architecture)
 - [Quick start](#quick-start)
 - [Configuration highlights](#configuration-highlights)
 - [Configuration comparison](#configuration-comparison)
@@ -35,10 +36,10 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 - **Verifiable**: built-in tests, `highwall check` / `inspect` / `diff`, a local quickstart, and structured JSONL audit output.
 
 - Good fit: internal services, static sites, admin surfaces, and small APIs that need an extra ingress layer.
-- Not a fit: large-scale DDoS scrubbing, WebSocket/HTTP/2 proxying, or replacing application authentication and authorization.
-- Composite deployment: this repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject. See [docs/STACK.md](docs/STACK.md) for the standard topology, bypass rules, and verification.
+- Not a fit: large-scale DDoS scrubbing or replacing application authentication and authorization. The Python baseline does not proxy WebSocket or HTTP/2; use the native core for H1 WebSocket and H2/H3 application traffic.
+- Composite deployment: this repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject and the Rust [native core](subprojects/native-core/README.md). See [docs/STACK.md](docs/STACK.md) for the standard topology, bypass rules, TCP/UDP split, and verification.
 
-> HighWall is still at `0.11.0` and has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+> HighWall's current development version is `0.12.0.dev0`; the latest published version remains `0.11.0`. It has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
 > **Protection boundary**: WAF signatures, DLP, behavior scoring, and honeypots are heuristics that reduce exposure. They are not an authentication or security boundary; they cannot distinguish a compromised same-host or same-namespace client, and DLP must not be sold as a leak-prevention guarantee.
 
@@ -90,7 +91,7 @@ See [Quick start](#quick-start) for all options.
 
 ## What it solves
 
-- Strict HTTP/1.x parsing: accepts only origin-form requests with an explicit `Content-Length`, and rejects `Transfer-Encoding`, `TE`, folded headers, duplicate sensitive headers, protocol upgrades, and encoded request bodies. This removes the usual CL.TE / TE.CL request-smuggling surface.
+- Strict HTTP/1.x parsing: requests must use origin-form. The Python proxy path requires an explicit `Content-Length`; the native H1 core additionally accepts a single valid `Transfer-Encoding: chunked` and re-frames it with an explicit length. Both paths reject duplicate or combined TE, TE+CL, `TE`, trailers, folded headers, duplicate sensitive headers, protocol upgrades, and encoded request bodies. This removes the usual CL.TE / TE.CL request-smuggling surface.
 - Three independent default-deny layers: Host, method, and path prefix. Host must exactly match a configured authority.
 - After path decoding, checks dot segments, encoded separators, backslashes, control characters, and NFKC normalization. Path parameters, trailing dots, and trailing spaces are rejected by default. Route ACL, method, and read-only decisions all use the same case-insensitive normalized path.
 - Conservative application signatures for SQL injection, XSS, path traversal, command injection, JNDI, and SSRF heuristics, with `detect` and `block` modes.
@@ -292,7 +293,7 @@ HighWall is an L7 gateway, not an “absolute” defense:
 - Integrity pinning covers only exact static `GET` paths and status codes in the configuration. Query strings are not part of the match and adding one does not bypass the check. It does not cover HEAD, dynamic pages, response headers, WebSocket, or streaming responses.
 - Honeypots cover only explicitly configured exact paths and cannot discover every scan. They may be fingerprinted, accidental bans can affect shared NAT sources, and they provide no high-interaction shell, file drop, or counterattack capability.
 - The circuit breaker intentionally returns 503 while an upstream is failing repeatedly. It is failure isolation, not DDoS scrubbing or a capacity guarantee.
-- It **does not proxy** WebSocket, HTTP/2, or bidirectional streaming responses; an Upgrade request is rejected. Responses are buffered up to `max_response_bytes`.
+- The **Python baseline does not proxy** WebSocket, HTTP/2, or bidirectional streaming responses; an Upgrade request is rejected. Responses are buffered up to `max_response_bytes`. H1 WebSocket and H2/H3 are handled only by the native core when explicitly configured.
 - WAF signatures are heuristic. They cannot guarantee coverage of every variant and may produce false positives. For an unknown application, start with `detect` before switching to `block`.
 - Response DLP is also heuristic: it scans only the prefix limited by `response_scan_max_bytes` plus response headers, does not treat media type as an exemption, and makes heuristic attempts at UTF-8, Latin-1, and UTF-16. `Set-Cookie` is intentionally excluded to avoid false positives on login JWTs. Unknown encodings, fragmentation, binary formats, and custom business formats can still evade detection. Start unknown applications with `response_scan_mode=detect`.
 - It does not add login, MFA, or authorization capabilities to the upstream. The upstream's own session security still matters.
@@ -300,14 +301,23 @@ HighWall is an L7 gateway, not an “absolute” defense:
 
 ## L4Wall subproject and composite deployment
 
-This repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject. L4Wall handles connection-level admission, rate limits, timeouts, behavior scoring, bans, and audit; HighWall continues to handle HTTP/1.1 WAF, DLP, and L7 policy. They are separate processes and do not replace each other.
+This repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject. L4Wall handles connection-level admission, rate limits, timeouts, behavior scoring, bans, and audit; Python HighWall continues to handle HTTP/1.1 WAF, DLP, and L7 policy, while the native B+D-4 core handles H1/H2/H3. They are separate processes and do not replace each other.
 
-Two profiles are supported:
+Three profiles are supported:
 
 - `lite`: `client -> L4Wall -> HighWall -> upstream` for single-host, small, and Windows deployments.
 - `standard`: `client -> HAProxy/Envoy -> HighWall -> upstream`; the edge proxy handles TLS, HTTP/2, WebSocket, and trusted client-IP sanitization, while L4Wall acts as the connection-level control plane. See [`deploy/standard/`](deploy/standard/README.md).
+- `native B+D-4`: TCP uses `client -> L4Wall -> PROXY v2 -> native TLS/H1/H2 -> upstream`; UDP uses `client -> native QUIC/H3 -> upstream`. H3 currently bypasses L4Wall, so UDP source ranges must be restricted separately at the network layer.
 
 Read [docs/STACK.md](docs/STACK.md) before deployment. L4Wall now includes an optional fail-isolated Redis shared-ban reader; automatic publishing, the controller, and multi-node HA are later milestones, so the standard skeleton is not a complete control plane yet.
+
+## L5/H2/H3 architecture
+
+The Rust native B+D-4 data plane lives in [`subprojects/native-core`](subprojects/native-core/README.md) and is currently `0.1.0-dev.0`. It terminates TLS/QUIC and strictly parses H1/H2/H3 in one gateway, with H1 WebSocket, H2/H3 gRPC, compressed bodies and trailers, bounded-body WAF/DLP, exact-IP bans, TLS mTLS/CRL, QUIC Retry, 0-RTT and migration disabled by default, and a QUIC client-network ACL. L4Wall can send standard PROXY v2 for TCP H1/H2; UDP H3 currently reaches the native QUIC listener directly. This TCP/UDP split must be understood explicitly during deployment.
+
+H1/H2/H3 are currently declared C3. C4 is not claimed: standardized JA3/JA4, real end-to-end WebSocket coverage, QPACK blocking, streaming backpressure saturation, and some slow-flow attacks remain uncovered. The standalone L5Wall `0.2.0` subproject remains C1 and provides TLS termination, session policy, and a bounded loopback H1 bridge. Safe Ops has no executor and keeps R2/R3 denied by default.
+
+`highwall capabilities --json` describes the **Python H1 baseline**; it is not the native-core capability manifest. C0/C1 are not complete protection, and forwarding an encrypted protocol is not protocol inspection. DSH completed its first independent acceptance pass with 0 Critical, 0 High, 3 Medium, 8 Low, and 3 informational findings, followed by r2/r3, r5, and r6 directed retests. In r5, seven of the eight scoped items closed (HWA-01/02/03/07/08/09/10). HWA-11 subsequently closed in the r6 narrow retest: HTTP 400 plus 270 termination, send-failure fallback, zero upstream hits, and no raw host-value leakage all passed. HWA-04/05/06 were not retested in the r5/r6 rounds. Independent attestation of the running process image is still missing, H3/UDP still bypasses L4Wall, and full production admission is not complete. See [docs/DSH-R6-RESULTS-20261101.md](docs/DSH-R6-RESULTS-20261101.md), [docs/DSH-R5-RESULTS-20261101.md](docs/DSH-R5-RESULTS-20261101.md), and [docs/DSH-REMEDIATION-20261101.md](docs/DSH-REMEDIATION-20261101.md) for evidence and boundaries, and [docs/DSH-SECURITY-ACCEPTANCE.md](docs/DSH-SECURITY-ACCEPTANCE.md) for the full acceptance scope. r5/r6 support manual release review but are not production admission, and DSH still recommends no push for production release. Public source and redacted test records have separate authorization for publication.
 
 ## Architecture
 
@@ -332,6 +342,15 @@ upstream application (ideally loopback or private network)
 ```
 
 The admin plane is a separate loopback HTTP listener and cannot be reached from an external network.
+
+The native B+D-4 profile has a separate ingress path:
+
+```text
+TCP: client -> L4Wall -> PROXY v2 -> native TLS -> H1/H2 -> upstream
+UDP: client -> native QUIC/H3 -> upstream
+```
+
+The native listener rejects unknown ALPN, validates SNI against Host where configured, bounds H2/H3 streams and frames, and records its own JSONL audit. The Python and native cores are independently tested; a local test pass in one does not prove the other.
 
 ## Quick start
 
@@ -405,6 +424,8 @@ The admin token is read only from the environment. Do not put it in `config.json
 
 ## Container image
 
+Docker images and Compose are **optional delivery formats**, not prerequisites for running, testing, or DSH acceptance. The native Rust/Python executables can be used directly for local and isolated-lab validation. Docker is only needed for container isolation, standardized packaging, or multi-node orchestration. A broken Docker daemon must not block the native path, and factory reset is not an acceptable workaround.
+
 Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.11.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0). The `0.11.0` image is published from the tag with a cosign signature and GitHub provenance attestation; the earlier `0.9.0` image does not have these attestations and must not be described as signed.
 
 ```bash
@@ -451,6 +472,17 @@ cosign verify ghcr.io/fallen-leaves089/highwall:0.11.0 \
   --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
+
+### Native B+D-4 image
+
+The Python image above contains only the Python H1 baseline. It does not contain the Rust native core or the vendored `h3` patch and must not be described as a complete B+D-4 image. The native core has a separate `Dockerfile.native`, runs as non-root UID `10001`, starts `highwall-native-core`, and does not start L4Wall:
+
+```bash
+docker build --file Dockerfile.native --tag highwall-native-core:dev .
+docker run --rm highwall-native-core:dev --version
+```
+
+No native GHCR image is published in this snapshot, and the image was not built locally because the Docker daemon was unavailable. Docker is only an optional packaging layer; the native executable can still be run directly without it. For production, mount the configuration, certificate, and private key read-only, give the audit path a dedicated persistent volume, and make the private-key UID and mode satisfy `tls.require_private_key_permissions` or startup will fail closed. H3/UDP bypasses L4Wall, so the network layer must separately restrict authorised UDP sources.
 
 ## Configuration highlights
 
@@ -597,7 +629,24 @@ The current suite covers strict parsing, path-parameter and trailing-dot bypasse
 
 The cross-layer loopback attack/defense acceptance suite lives in `tests/test_attack_defense.py`. It chains a real L4Wall, HighWall, and a stub upstream over TCP and covers L4 bans/rate limits/timeouts, shared-ban failure isolation, L7 Host/smuggling/traversal/WAF/DLP/CSRF/XFF, and the direct-to-HighWall/upstream bypass boundary. See [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md) for the full matrix, measured results, and unverified items.
 
-GitHub Actions runs Ruff, mypy, coverage, and the full suite on Ubuntu/Windows with Python 3.10–3.12. CodeQL scans every pull request and weekly; Dependabot checks Actions, Python development dependencies, and the Docker base image weekly. All third-party Actions are pinned to commit SHAs, and release images carry an SBOM, provenance, a cosign signature, and a GitHub attestation.
+The native core has Rust unit, protocol, and live-listener tests. All 143 `cargo test --all-targets --locked` cases pass, covering real TCP/TLS/QUIC/H1/H2/H3 listeners, PROXY v2, Retry, unknown ALPN, 0-RTT, connection migration, WAF/DLP, gRPC/trailers, and resource budgets:
+
+```powershell
+cd subprojects/native-core
+cargo fmt --all -- --check
+cargo clippy --all-targets --locked -- -D warnings
+cargo test --all-targets --locked
+cargo build --release --locked
+```
+
+The real L4Wall-to-native chain test is skipped by default. After building the release binary, enable it explicitly:
+
+```powershell
+$env:HIGHWALL_RUN_NATIVE_CHAIN='1'
+python -m unittest tests.test_native_chain -v
+```
+
+GitHub Actions runs Ruff, mypy, coverage, and the full suite on Ubuntu/Windows with Python 3.10–3.14. CodeQL scans every pull request and weekly; Dependabot checks Actions, Python development dependencies, and the Docker base image weekly. All third-party Actions are pinned to commit SHAs, and release images carry an SBOM, provenance, a cosign signature, and a GitHub attestation.
 
 ## License
 
