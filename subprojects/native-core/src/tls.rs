@@ -1010,9 +1010,10 @@ impl TlsConnectionInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    use std::process::Command;
     use std::{
         path::PathBuf,
-        process::Command,
         sync::{
             atomic::{AtomicU64, Ordering},
             Arc,
