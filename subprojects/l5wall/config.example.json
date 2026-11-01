@@ -1,0 +1,20 @@
+{
+  "cert_file": "tests/fixtures/test-cert.pem",
+  "key_file": "tests/fixtures/test-key.pem",
+  "min_version": "TLSv1_2",
+  "allowed_alpn": ["http/1.1"],
+  "allowed_sni": ["localhost"],
+  "allow_missing_sni": false,
+  "mtls_mode": "off",
+  "handshake_timeout": 2.0,
+  "listen_host": "127.0.0.1",
+  "listen_port": 18443,
+  "upstream_host": "127.0.0.1",
+  "upstream_port": 18080,
+  "max_connections": 128,
+  "connect_timeout": 2.0,
+  "idle_timeout": 15.0,
+  "max_bytes_per_direction": 67108864,
+  "max_request_head_bytes": 32768,
+  "require_sni_host_match": true
+}

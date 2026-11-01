@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "l5wall"
+version = "0.2.0"
+description = "Fail-closed TLS session policy for HighWall"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+authors = [{ name = "HighWall contributors" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Internet :: Proxy Servers",
+    "Topic :: Security",
+]
+
+[project.optional-dependencies]
+test = ["cryptography==50.0.1"]
+
+[project.scripts]
+l5wall = "l5wall.cli:main"
+
+[tool.setuptools]
+packages = ["l5wall"]
+
+[tool.setuptools.package-data]
+l5wall = ["py.typed"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B006", "B008", "B017"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["l5wall"]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+show_error_codes = true
+pretty = true

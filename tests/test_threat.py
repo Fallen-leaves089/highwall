@@ -8,7 +8,7 @@ from pathlib import Path
 
 from highwall.alerting import AlertDispatcher
 from highwall.config import ConfigError, parse_config
-from highwall.fingerprint import request_fingerprint, shape_fingerprint
+from highwall.fingerprint import correlation_fingerprint, request_fingerprint, shape_fingerprint
 from highwall.metrics import Metrics
 from highwall.offenders import OffenderRegistry
 from highwall.protocol import RequestHead
@@ -90,7 +90,7 @@ class FingerprintTests(unittest.TestCase):
         first = _head(cookie="session=one")
         second = _head(cookie="session=two")
         self.assertEqual(shape_fingerprint(first), shape_fingerprint(second))
-        self.assertEqual(request_fingerprint(first, "203.0.113.8")[0], request_fingerprint(second, "203.0.113.9")[0])
+        self.assertEqual(request_fingerprint(first, "203.0.113.8")[0], request_fingerprint(second, "203.0.113.8")[0])
 
     def test_user_agent_and_tls_change_fingerprint(self) -> None:
         first = _head(ua="agent/1")
@@ -101,12 +101,21 @@ class FingerprintTests(unittest.TestCase):
         assert profile is not None
         self.assertNotEqual(shape_fingerprint(first), shape_fingerprint(first, profile))
 
-    def test_source_prefix_clusters_same_slash_24(self) -> None:
-        first = request_fingerprint(_head(), "203.0.113.8")[0]
-        second = request_fingerprint(_head(), "203.0.113.200")[0]
-        third = request_fingerprint(_head(), "203.0.114.8")[0]
+    def test_correlation_fingerprint_clusters_same_slash_24(self) -> None:
+        first = correlation_fingerprint(_head(), "203.0.113.8")[0]
+        second = correlation_fingerprint(_head(), "203.0.113.200")[0]
+        third = correlation_fingerprint(_head(), "203.0.114.8")[0]
         self.assertEqual(first, second)
         self.assertNotEqual(first, third)
+
+    def test_enforcement_fingerprint_is_exact_ip_and_shape(self) -> None:
+        first = request_fingerprint(_head(), "203.0.113.8")[0]
+        peer = request_fingerprint(_head(), "203.0.113.200")[0]
+        other_prefix = request_fingerprint(_head(), "203.0.114.8")[0]
+        changed_shape = request_fingerprint(_head(ua="agent/2"), "203.0.113.8")[0]
+        self.assertNotEqual(first, peer)
+        self.assertNotEqual(first, other_prefix)
+        self.assertNotEqual(first, changed_shape)
 
 
 class TLSFingerprintTests(unittest.TestCase):
@@ -335,6 +344,94 @@ class ThreatDetectorTests(unittest.TestCase):
         self.assertEqual(assessment.confidence, "confirmed")
         self.assertEqual(assessment.action, "tarpit")
         self.assertIsNotNone(assessment.offender)
+
+    def test_confirmation_does_not_contain_a_peer_in_the_same_prefix(self) -> None:
+        for index in range(4):
+            self.detector.assess(_head(f"/scan/{index}"), "203.0.113.8")
+        fingerprint = self.detector.assess(_head("/scan/new"), "203.0.113.8").fingerprint
+        shape = self.detector.assess(_head("/scan/newer"), "203.0.113.8").shape_fingerprint
+        confirmed = self.detector.record_violation(
+            fingerprint,
+            shape,
+            "HW-WAF-1001",
+            403,
+            client_ip="203.0.113.8",
+        )
+        assert confirmed is not None
+        self.assertEqual(confirmed.confidence, "confirmed")
+
+        peer = self.detector.assess(_head(), "203.0.113.9")
+
+        self.assertNotEqual(peer.confidence, "confirmed")
+        self.assertNotEqual(peer.action, "tarpit")
+        self.assertIsNone(peer.offender)
+
+    def test_assessment_separates_exact_actor_and_prefix_correlation(self) -> None:
+        first = self.detector.assess(_head(), "203.0.113.8")
+        peer = self.detector.assess(_head(), "203.0.113.9")
+
+        self.assertNotEqual(first.fingerprint, peer.fingerprint)
+        self.assertEqual(first.correlation_fingerprint, peer.correlation_fingerprint)
+
+    def test_new_mark_records_exact_scope_and_correlation_key(self) -> None:
+        head = _head()
+        fingerprint, shape = request_fingerprint(head, "203.0.113.8")
+        correlation, _ = correlation_fingerprint(head, "203.0.113.8")
+        self.registry.mark(
+            fingerprint=fingerprint,
+            shape_fingerprint_value=shape,
+            tag="confirmed_fast_attack",
+            confidence="confirmed",
+            score=95,
+            signals=("request_rate",),
+            action="tarpit",
+            source_prefix_value="203.0.113.0/24",
+            correlation_fingerprint_value=correlation,
+        )
+
+        record = self.registry.active()[0]
+
+        self.assertEqual(record.ban_scope, "exact_ip")
+        self.assertEqual(record.correlation_fingerprint, correlation)
+
+    def test_legacy_prefix_marks_are_not_exact_enforcement_records(self) -> None:
+        head = _head()
+        fingerprint, shape = request_fingerprint(head, "203.0.113.8")
+        path = self.directory / "legacy-offenders.json"
+        now = 1_700_000_100.0
+        path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "offenders": [
+                        {
+                            "fingerprint": fingerprint,
+                            "shape_fingerprint": shape,
+                            "tag": "confirmed_fast_attack",
+                            "confidence": "confirmed",
+                            "score": 95,
+                            "signals": ["request_rate"],
+                            "first_seen": now,
+                            "last_seen": now,
+                            "expires_at": now + 3600,
+                            "hits": 1,
+                            "action": "tarpit",
+                            "source_prefix": "203.0.113.0/24",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        registry = OffenderRegistry(path, max_entries=32, ttl_seconds=3600, clock=lambda: now)
+
+        record = registry.active()[0]
+        match = registry.get(fingerprint, shape)
+
+        self.assertEqual(record.ban_scope, "legacy_prefix")
+        self.assertIsNotNone(match)
+        assert match is not None
+        self.assertFalse(match.exact)
 
     def test_expired_containment_resets_confirmation_timer(self) -> None:
         detector = ThreatDetector(

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "highwall"
-version = "0.11.0"
+version = "0.12.0.dev0"
 description = "Fail-closed HTTP application firewall and reverse proxy"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -21,6 +21,8 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: Proxy Servers",
     "Topic :: Security",
 ]
@@ -28,6 +30,7 @@ classifiers = [
 [project.optional-dependencies]
 dev = [
     "coverage==7.16.2",
+    "cryptography==50.0.1",
     "mypy==2.4.0",
     "ruff==0.17.3",
 ]

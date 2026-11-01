@@ -13,6 +13,7 @@ from typing import Any, cast
 
 from . import __version__
 from .admin import build_admin_server
+from .capabilities import capability_manifest
 from .config import Config, ConfigError, load_config, load_config_data
 from .config_audit import audit_config
 from .config_diff import build_config_diff
@@ -27,6 +28,7 @@ from .init_config import (
 )
 from .proxy import GatewayServer, build_tls_context
 from .runtime import Runtime, load_admin_token, validate_admin_token
+from .safe_ops import SafeOpsError, SafeOpsPolicy, load_ops_plan
 
 _LOG = logging.getLogger("highwall")
 
@@ -104,6 +106,42 @@ def _print_config_diff(report: dict[str, Any]) -> None:
         print("restart required for: " + ", ".join(str(path) for path in report["restart_required"]))
     if regressions:
         print("promotion blocked: candidate weakens an existing security control")
+
+
+def _capabilities(args: argparse.Namespace) -> int:
+    manifest = capability_manifest()
+    if args.json:
+        print(json.dumps(manifest, indent=2, ensure_ascii=True))
+        return 0
+    print(f"schema: {manifest['schema']}")
+    for surface in manifest["surfaces"]:
+        status = "complete" if surface["complete"] else "incomplete"
+        print(
+            f"{surface['layer']} {surface['name']}: {surface['level']} ({status}) - "
+            f"{surface['declared']}"
+        )
+    return 0
+
+
+def _ops_preview(args: argparse.Namespace) -> int:
+    try:
+        request = load_ops_plan(args.plan)
+        policy = SafeOpsPolicy(tuple(args.allow_root or ()))
+        decision = policy.evaluate(request)
+    except (SafeOpsError, OSError, ValueError) as exc:
+        print(f"safe ops plan error: {exc}", file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(decision.as_dict(), indent=2, ensure_ascii=True))
+    else:
+        print(f"allowed: {str(decision.allowed).lower()}")
+        print(f"risk: {decision.risk}")
+        print(f"plan: {decision.plan_sha256}")
+        for reason in decision.reasons:
+            print(f"reason: {reason}")
+        for control in decision.requires_approval:
+            print(f"required: {control}")
+    return 0 if decision.allowed else 4
 
 
 def _serve(config: Config, config_path: Path) -> int:
@@ -268,6 +306,21 @@ def build_parser() -> argparse.ArgumentParser:
     diff.add_argument("-c", "--config", required=True, help="path to the current JSON configuration")
     diff.add_argument("--candidate", required=True, help="path to the candidate JSON configuration")
     diff.add_argument("--json", action="store_true", help="emit a machine-readable JSON report")
+    capabilities = subparsers.add_parser(
+        "capabilities",
+        help="print the declared L5/L7 protocol coverage manifest",
+    )
+    capabilities.add_argument("--json", action="store_true", help="emit a machine-readable JSON report")
+    ops = subparsers.add_parser("ops", help="read-only Safe Ops planning and deny-by-default policy")
+    ops_subparsers = ops.add_subparsers(dest="ops_command", required=True)
+    ops_preview = ops_subparsers.add_parser("preview", help="evaluate a typed operation plan without executing it")
+    ops_preview.add_argument("--plan", required=True, help="path to the JSON operation plan")
+    ops_preview.add_argument(
+        "--allow-root",
+        action="append",
+        help="absolute directory that path operations may reference; repeat for multiple roots",
+    )
+    ops_preview.add_argument("--json", action="store_true", help="emit a machine-readable JSON decision")
     init = subparsers.add_parser("init", help="write a compact deployment configuration")
     init.add_argument(
         "--base",
@@ -403,6 +456,12 @@ def main(argv: list[str] | None = None) -> int:
         return _init(args)
     if args.command == "diff":
         return _diff(args)
+    if args.command == "capabilities":
+        return _capabilities(args)
+    if args.command == "ops":
+        if args.ops_command == "preview":
+            return _ops_preview(args)
+        parser.error("unknown ops command")
     try:
         config = load_config(Path(args.config))
     except ConfigError as exc:

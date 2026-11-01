@@ -831,6 +831,8 @@ class ProxyIntegrationTests(unittest.TestCase):
                         "confirm_after_seconds": 9999,
                         "containment_seconds": 300,
                         "confirmed_containment_seconds": 900,
+                        "agent_min_signals": 6,
+                        "agent_score": 0,
                         "throttle_ms": 10,
                         "max_throttle_ms": 20,
                         "tarpit_hold_seconds": 1,

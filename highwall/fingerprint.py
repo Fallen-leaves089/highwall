@@ -56,6 +56,18 @@ def source_prefix(client_ip: str) -> str:
     return str(ipaddress.ip_network(f"{address}/64", strict=False))
 
 
+def _exact_source(client_ip: str) -> str:
+    """Return a canonical address for enforcement, or an empty value when invalid."""
+
+    try:
+        address = ipaddress.ip_address(client_ip)
+    except ValueError:
+        return ""
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    return str(address)
+
+
 def header_shape(head: RequestHead) -> str:
     tokens: list[str] = []
     for name, value in head.headers:
@@ -83,13 +95,43 @@ def request_fingerprint(
     client_ip: str,
     tls_profile: TLSProfile | None = None,
 ) -> tuple[str, str]:
-    """Return (actor fingerprint, shape fingerprint)."""
+    """Return (exact-source enforcement key, shape fingerprint).
+
+    The enforcement key deliberately includes only the normalized client address
+    and protocol shape.  It must never use a /24 or /64 prefix, because that
+    would turn a per-client containment decision into a range-wide ban.
+    """
 
     shape = shape_fingerprint(head, tls_profile)
+    source = _exact_source(client_ip)
+    if not source:
+        return "", shape
     actor = _digest(
-        "highwall-actor-v1\n"
-        + source_prefix(client_ip)
+        "highwall-actor-v2\n"
+        + source
         + "\n"
         + shape
     )[:32]
     return actor, shape
+
+
+def correlation_fingerprint(
+    head: RequestHead,
+    client_ip: str,
+    tls_profile: TLSProfile | None = None,
+) -> tuple[str, str]:
+    """Return a prefix-level correlation key and shape, never used for bans."""
+
+    shape = shape_fingerprint(head, tls_profile)
+    return correlation_fingerprint_from_shape(client_ip, shape), shape
+
+
+def correlation_fingerprint_from_shape(client_ip: str, shape: str) -> str:
+    """Return a stable prefix-level correlation key for an already computed shape."""
+
+    return _digest(
+        "highwall-correlation-v1\n"
+        + source_prefix(client_ip)
+        + "\n"
+        + shape
+    )[:32]

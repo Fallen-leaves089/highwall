@@ -86,6 +86,7 @@ l4wall run --config config.json
 | `listeners[].idle_timeout` | 双向空闲超时 | 按业务长连接需求调整 |
 | `listeners[].max_connection_seconds` | 单连接最长寿命 | 防止无限期占用 |
 | `listeners[].max_bytes_per_direction` | 单向字节上限 | 只做资源上限，不做内容检查 |
+| `listeners[].send_proxy_v2` | 向上游写 PROXY v2 TCP header | 只对明确支持 PROXY v2 的上游开启；默认关闭 |
 | `listeners[].new_connections_per_second` | 单 listener 新建连接速率 | 按正常业务峰值设置 |
 | `threat_detection.mode` | `score` / `throttle` / `block` | 先 `score` 观察，再 `block` |
 | `threat_detection.agent_*` | Agent 行为评分参数 | 结合审计调阈值，不要照搬 |
@@ -182,7 +183,7 @@ Redis 值必须是版本化 JSON：
 - L4Wall 和 HighWall 是两个独立进程，L4Wall 不修改 HighWall 代码。
 - `lite` 串联：`客户端 -> L4Wall -> HighWall -> 上游`，适合单机和小规模。
 - `standard` 形态：`客户端 -> HAProxy/Envoy -> HighWall -> 上游`；HAProxy 负责 TLS、HTTP/2、WebSocket 和真实 IP 清洗，L4Wall 作为连接级控制面。完整基线见 [docs/STACK.md](../../docs/STACK.md)。
-- L4Wall 是透明 TCP 转发，不会自动写 PROXY protocol 或 `X-Forwarded-For`。`lite` 下 HighWall 看到的来源是 L4Wall 地址，不能据此做真实客户端归属；需要按真实客户端做 L7 限速和封禁时，使用 `standard` 形态。
+- L4Wall 默认是透明 TCP 转发。设置 `send_proxy_v2=true` 后，它会写标准 PROXY v2 TCP header，但不会写 `X-Forwarded-For`。该模式只适用于明确支持 PROXY v2 的上游，例如把原生核心的 `listen.proxy_protocol.mode` 设为 `required`；Python HighWall 不解析 PROXY v2，不能直接接在这种模式后面。
 - `policy.allowed_client_networks` 检查的是 HighWall 解析后的客户端 IP，不是 L4Wall 的 peer 地址。不要把它误填成 L4Wall 的 `/32`；网络层仍必须保证只有 L4Wall 能访问 HighWall。
 - 两层审计目前只能按时间戳、listener、来源 IP 近似关联；跨层精确关联 ID 仍是后续工作。
 
@@ -197,7 +198,7 @@ python -m l4wall inspect --config config.json
 
 `inspect` 只输出生效配置，不输出密码或管理令牌的环境变量名，可安全粘贴到工单。
 
-测试覆盖配置严格性、CIDR 策略、令牌桶、审计轮转、Agent 评分、封禁持久化、回环转发、来源拒绝、连接限速、首字节超时、字节上限、单 IP 并发上限、封禁检查独立于评分开关，以及共享封禁的超时、坏 JSON、超大响应、空键、过期/跨版本条目、TTL 截断和本地优先合并。跨层回环攻防验收见 [docs/ATTACK_TESTING.md](../../docs/ATTACK_TESTING.md)。
+测试覆盖配置严格性、CIDR 策略、令牌桶、审计轮转、Agent 评分、封禁持久化、回环转发、来源拒绝、连接限速、首字节超时、字节上限、单 IP 并发上限、PROXY v2 编码与上游首包、封禁检查独立于评分开关，以及共享封禁的超时、坏 JSON、超大响应、空键、过期/跨版本条目、TTL 截断和本地优先合并。跨层回环攻防验收见 [docs/ATTACK_TESTING.md](../../docs/ATTACK_TESTING.md)。
 
 ## 目录
 

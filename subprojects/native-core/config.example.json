@@ -1,0 +1,136 @@
+{
+  "listen": {
+    "host": "127.0.0.1",
+    "port": 18080,
+    "allow_non_loopback": false,
+    "proxy_protocol": {
+      "mode": "off",
+      "trusted_proxy_networks": [],
+      "header_timeout_ms": 2000
+    }
+  },
+  "tls": null,
+  "quic": null,
+  "upstream": {
+    "host": "127.0.0.1",
+    "port": 18081,
+    "h2_for_grpc": true,
+    "set_forwarded_for": false
+  },
+  "limits": {
+    "max_connections": 1024,
+    "max_connections_per_ip": 64,
+    "max_requests_per_connection": 100,
+    "max_head_bytes": 32768,
+    "max_header_count": 100,
+    "max_header_line_bytes": 8192,
+    "max_body_bytes": 8388608,
+    "max_response_bytes": 16777216,
+    "header_timeout_ms": 5000,
+    "body_idle_timeout_ms": 15000,
+    "request_total_timeout_ms": 30000,
+    "upstream_connect_timeout_ms": 3000,
+    "upstream_read_timeout_ms": 15000,
+    "max_h2_streams": 64,
+    "max_h2_stream_window_bytes": 1048576,
+    "max_h2_connection_window_bytes": 16777216,
+    "max_h2_requests_per_connection": 2000,
+    "max_h2_reset_errors": 32,
+    "max_h2_pings_per_second": 10.0,
+    "max_h2_ping_burst": 20.0,
+    "max_h2_ping_frames_per_connection": 1000,
+    "max_h2_header_list_bytes": 32768,
+    "max_h2_frame_size": 16384,
+    "max_h2_send_buffer_bytes": 1048576,
+    "h2_idle_timeout_ms": 60000,
+    "max_h3_streams": 64,
+    "max_h3_requests_per_connection": 2000,
+    "max_h3_reset_errors": 32,
+    "max_h3_field_section_bytes": 32768,
+    "max_ws_frame_bytes": 262144,
+    "max_ws_message_bytes": 1048576,
+    "max_ws_messages_per_second": 100,
+    "max_ws_idle_timeout_ms": 120000,
+    "max_grpc_message_bytes": 4194304,
+    "max_grpc_messages": 1024,
+    "max_grpc_total_bytes": 16777216,
+    "max_inspect_decoded_bytes": 16777216,
+    "tls_handshake_timeout_ms": 5000,
+    "max_tls_handshakes_per_second_per_ip": 20.0,
+    "max_tls_handshake_burst_per_ip": 40.0,
+    "max_tls_handshake_entries": 65536
+  },
+  "audit": {
+    "enabled": true,
+    "path": "native-audit.jsonl",
+    "queue_capacity": 4096,
+    "fail_closed": true
+  },
+  "policy": {
+    "require_host": true,
+    "allowed_methods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "max_path_bytes": 4096,
+    "max_query_bytes": 8192,
+    "inspect_compressed_bodies": true,
+    "rate_limit": {
+      "requests_per_second": 500.0,
+      "burst": 1000.0,
+      "max_entries": 65536
+    },
+    "waf": {
+      "enabled": true,
+      "deny_scanner_paths": true,
+      "inspect_query": true,
+      "inspect_headers": true,
+      "inspect_body_text": true
+    },
+    "dlp": {
+      "enabled": true,
+      "inspect_request": true,
+      "inspect_response": true,
+      "detect_high_entropy": true
+    }
+  },
+  "routes": [
+    {
+      "name": "default",
+      "host": null,
+      "path_prefix": "/",
+      "methods": [],
+      "upstream": null,
+      "websocket": false,
+      "ws_origins": [],
+      "ws_subprotocols": [],
+      "ws_require_origin": true,
+      "ws_allow_same_origin": false,
+      "ws_require_subprotocol": false,
+      "ws_allow_extensions": false,
+      "ws_inspect_messages": true,
+      "grpc": false,
+      "waf": true,
+      "dlp": true,
+      "audit": true,
+      "max_body_bytes": null
+    }
+  ],
+  "agent": {
+    "enabled": true,
+    "mode": "suspect",
+    "max_entries": 16384,
+    "window_seconds": 60,
+    "max_requests_per_window": 600,
+    "max_distinct_paths": 120,
+    "max_distinct_methods": 8,
+    "max_user_agent_changes": 12
+  },
+  "bans": {
+    "enabled": true,
+    "ttl_seconds": 300,
+    "max_ttl_seconds": 900,
+    "max_entries": 4096,
+    "violation_threshold": 5,
+    "violation_window_seconds": 60,
+    "response_violation_threshold": 10,
+    "response_violation_window_seconds": 300
+  }
+}

@@ -21,3 +21,10 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
+**/.cargo-ok
+
+# Rust build products are never source or release artifacts.
+subprojects/native-core/target/
+subprojects/native-core/target-*/
+vendor/h3/target/
+vendor/h3-quinn/target/

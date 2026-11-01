@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1.7
+
+FROM rust:1.97.1-bookworm AS builder
+
+ARG HIGHWALL_VERSION=0.1.0-dev.0
+ARG HIGHWALL_REVISION=unknown
+
+WORKDIR /build
+COPY subprojects/native-core/Cargo.toml subprojects/native-core/Cargo.lock ./subprojects/native-core/
+COPY vendor/h3 ./vendor/h3
+COPY vendor/h2 ./vendor/h2
+COPY subprojects/native-core/src ./subprojects/native-core/src
+
+WORKDIR /build/subprojects/native-core
+RUN cargo build --release --locked --bin highwall-native-core
+
+
+FROM debian:bookworm-slim
+
+ARG HIGHWALL_VERSION=0.1.0-dev.0
+ARG HIGHWALL_REVISION=unknown
+
+LABEL org.opencontainers.image.title="HighWall Native Core" \
+      org.opencontainers.image.description="Fail-closed Rust TLS/QUIC and HTTP/1.1, HTTP/2, HTTP/3 data plane" \
+      org.opencontainers.image.source="https://github.com/Fallen-leaves089/highwall" \
+      org.opencontainers.image.url="https://github.com/Fallen-leaves089/highwall" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.version="${HIGHWALL_VERSION}" \
+      org.opencontainers.image.revision="${HIGHWALL_REVISION}"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libgcc-s1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 highwall \
+    && useradd --uid 10001 --gid highwall --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin highwall \
+    && mkdir -p /etc/highwall /var/lib/highwall /usr/share/highwall \
+    && chown root:highwall /etc/highwall \
+    && chown highwall:highwall /var/lib/highwall \
+    && chmod 0750 /etc/highwall /var/lib/highwall
+
+COPY --from=builder /build/subprojects/native-core/target/release/highwall-native-core /usr/local/bin/highwall-native-core
+COPY LICENSE NOTICE /usr/share/highwall/
+
+ENV HIGHWALL_NATIVE_CONFIG=/etc/highwall/native.json
+
+USER 10001:10001
+EXPOSE 18443/tcp 18443/udp
+STOPSIGNAL SIGTERM
+
+ENTRYPOINT ["/usr/local/bin/highwall-native-core"]
+CMD ["--config", "/etc/highwall/native.json"]

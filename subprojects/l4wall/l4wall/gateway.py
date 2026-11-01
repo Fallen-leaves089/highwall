@@ -14,6 +14,7 @@ from .config import GatewayConfig, ListenerConfig
 from .errors import SessionError
 from .metrics import Metrics
 from .policy import IPAddress, SourcePolicy, normalize_ip
+from .proxy_protocol import encode_proxy_v2
 from .ratelimit import TokenBucket
 from .tracker import Assessment, ConnectionRecord, ThreatTracker
 
@@ -124,7 +125,9 @@ class Gateway:
         started = time.monotonic()
         peer = writer.get_extra_info("peername")
         peer_ip = peer[0] if isinstance(peer, tuple) and peer else ""
+        peer_port = int(peer[1]) if isinstance(peer, tuple) and len(peer) > 1 else 0
         address = normalize_ip(peer_ip) if peer_ip else None
+        local_name = writer.get_extra_info("sockname")
         admitted = False
         recorded = False
         reason = "closed"
@@ -190,7 +193,15 @@ class Gateway:
                 return
             try:
                 result = await asyncio.wait_for(
-                    self._session(listener, reader, writer), timeout=listener.max_connection_seconds
+                    self._session(
+                        listener,
+                        reader,
+                        writer,
+                        address,
+                        peer_port,
+                        local_name,
+                    ),
+                    timeout=listener.max_connection_seconds,
                 )
                 reason = result.reason
             except asyncio.TimeoutError:
@@ -332,7 +343,13 @@ class Gateway:
         self.metrics.set_gauge("l4wall_active_clients", len(self._active_per_ip))
 
     async def _session(
-        self, listener: ListenerConfig, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter
+        self,
+        listener: ListenerConfig,
+        client_reader: asyncio.StreamReader,
+        client_writer: asyncio.StreamWriter,
+        source_address: IPAddress,
+        source_port: int,
+        local_name: object,
     ) -> SessionResult:
         try:
             upstream_reader, upstream_writer = await asyncio.wait_for(
@@ -345,6 +362,13 @@ class Gateway:
             raise SessionError("upstream_unreachable") from exc
         stats = SessionResult()
         try:
+            if listener.send_proxy_v2:
+                try:
+                    header = encode_proxy_v2(source_address, source_port, local_name)
+                except ValueError as exc:
+                    raise SessionError("proxy_v2_invalid_source") from exc
+                upstream_writer.write(header)
+                await upstream_writer.drain()
             await self._pump_both(listener, client_reader, client_writer, upstream_reader, upstream_writer, stats)
         finally:
             await _close_writer(upstream_writer)
