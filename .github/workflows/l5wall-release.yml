@@ -1,0 +1,221 @@
+name: L5Wall Release
+
+on:
+  push:
+    tags: ["l5wall-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing L5Wall tag to publish, for example l5wall-v0.2.0"
+        required: true
+        type: string
+
+permissions:
+  attestations: write
+  contents: write
+  id-token: write
+  packages: write
+
+concurrency:
+  group: l5wall-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  PACKAGE_DIR: subprojects/l5wall
+
+jobs:
+  verify:
+    name: Verify / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: python -m pip install --disable-pip-version-check "cryptography==50.0.1"
+
+      - name: Install static analysis tools
+        if: matrix.python-version == '3.12'
+        run: python -m pip install --disable-pip-version-check "ruff==0.17.3" "mypy==2.4.0"
+
+      - name: Generate loopback test certificates
+        working-directory: ${{ env.PACKAGE_DIR }}
+        run: python test_certificates.py
+
+      - name: Test
+        working-directory: ${{ env.PACKAGE_DIR }}
+        run: python -m unittest discover -s tests -v
+
+      - name: Static checks
+        if: matrix.python-version == '3.12'
+        working-directory: ${{ env.PACKAGE_DIR }}
+        run: |
+          python -m ruff check l5wall tests test_certificates.py scripts
+          python -m mypy l5wall
+          python -m l5wall check --config config.example.json
+
+  image:
+    name: Publish GHCR image
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag and version
+        id: version
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in
+            l5wall-v*) ;;
+            *) echo "::error::expected an l5wall-v* tag, got $tag"; exit 1 ;;
+          esac
+          version="${tag#l5wall-v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@f7ce87c1d6bead3e36075b2ce75da1f6cc28aaca # v3.9.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Normalize image reference
+        id: image
+        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/l5wall" >> "$GITHUB_OUTPUT"
+
+      - id: meta
+        uses: docker/metadata-action@318604b99e75e41977312d83839a89be02ca4893 # v5.9.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=sha
+            type=raw,value=latest,enable=${{ startsWith(steps.version.outputs.tag, 'l5wall-v') }}
+          labels: |
+            org.opencontainers.image.title=L5Wall
+            org.opencontainers.image.description=Fail-closed TLS session policy and bounded HTTP/1.1 bridge for HighWall
+            org.opencontainers.image.licenses=Apache-2.0
+
+      - id: build
+        uses: docker/build-push-action@4f58ea79222b3b9dc2c8bbdd6debcef730109a75 # v6.9.0
+        with:
+          context: ${{ env.PACKAGE_DIR }}
+          file: ${{ env.PACKAGE_DIR }}/Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            L5WALL_VERSION=${{ steps.version.outputs.version }}
+            L5WALL_REVISION=${{ github.sha }}
+          provenance: mode=max
+          sbom: true
+          cache-from: type=gha,scope=l5wall
+          cache-to: type=gha,mode=max,scope=l5wall
+
+      - name: Attest image provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push: true
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: v2.6.5
+
+      - name: Sign published image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "$IMAGE"
+
+  release:
+    name: Build packages and publish release
+    needs: [verify, image]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag and version
+        id: version
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in
+            l5wall-v*) ;;
+            *) echo "::error::expected an l5wall-v* tag, got $tag"; exit 1 ;;
+          esac
+          version="${tag#l5wall-v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --disable-pip-version-check "build==1.3.0"
+          python -m build --sdist --wheel --outdir dist "${{ env.PACKAGE_DIR }}"
+
+      - name: Reject secrets and test material in artifacts
+        run: python "${{ env.PACKAGE_DIR }}/scripts/check_dist.py" dist
+
+      - name: Install wheel and check CLI
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python -m venv "$RUNNER_TEMP/l5wall-venv"
+          "$RUNNER_TEMP/l5wall-venv/bin/pip" install --disable-pip-version-check dist/*.whl
+          installed="$("$RUNNER_TEMP/l5wall-venv/bin/l5wall" --version | awk '{print $2}')"
+          test "$installed" = "$VERSION"
+          "$RUNNER_TEMP/l5wall-venv/bin/l5wall" --version
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum *.whl *.tar.gz > SHA256SUMS
+
+      - name: Prepare release notes
+        env:
+          IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
+        run: |
+          cp "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.md" release-notes.md
+          printf '\n\n---\n\n' >> release-notes.md
+          cat "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.en.md" >> release-notes.md
+          printf '\n\n**Image digest:** `%s`\n' "$IMAGE_DIGEST" >> release-notes.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --title "L5Wall $VERSION" --notes-file release-notes.md
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "L5Wall $VERSION" --notes-file release-notes.md
+          fi

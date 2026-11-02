@@ -1,0 +1,38 @@
+[Unit]
+Description=L5Wall TLS session guard
+Documentation=https://github.com/Fallen-leaves089/highwall/tree/main/subprojects/l5wall
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=l5wall
+Group=l5wall
+Environment=PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
+ExecStartPre=/opt/l5wall/bin/l5wall check -c /etc/l5wall/config.json
+ExecStart=/opt/l5wall/bin/l5wall serve -c /etc/l5wall/config.json
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+LimitNOFILE=65536
+TasksMax=256
+
+[Install]
+WantedBy=multi-user.target

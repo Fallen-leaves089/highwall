@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "l5wall"
 version = "0.2.0"
 description = "Fail-closed TLS session policy for HighWall"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 dependencies = []
 authors = [{ name = "HighWall contributors" }]
@@ -14,13 +16,22 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: System Administrators",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Internet :: Proxy Servers",
     "Topic :: Security",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Fallen-leaves089/highwall/tree/main/subprojects/l5wall"
+Repository = "https://github.com/Fallen-leaves089/highwall"
+Issues = "https://github.com/Fallen-leaves089/highwall/issues"
+Security = "https://github.com/Fallen-leaves089/highwall/security/policy"
 
 [project.optional-dependencies]
 test = ["cryptography==50.0.1"]

@@ -1,0 +1,5 @@
+include LICENSE NOTICE README.md
+prune tests
+prune scripts
+prune docs
+prune deploy

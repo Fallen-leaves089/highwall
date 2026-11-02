@@ -1,0 +1,19 @@
+name: l5wall-host
+
+services:
+  l5wall:
+    image: ghcr.io/fallen-leaves089/l5wall:0.2.0
+    container_name: l5wall
+    network_mode: host
+    read_only: true
+    user: "10001:10001"
+    volumes:
+      - ./l5wall/config.json:/etc/l5wall/config.json:ro
+      - ./l5wall/tls:/etc/l5wall/tls:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
