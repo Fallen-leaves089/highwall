@@ -322,7 +322,7 @@ HighWall 仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.m
 
 能力是否成立以 C0-C4 等级和测试门槛为准，不能把协议透传当作完整检查。启用 HAProxy/Envoy 终止 TLS 时，必须明确它是否导致真实客户端 JA3/JA4 丢失。
 
-L5 已按 L4Wall 的方式独立为 [`subprojects/l5wall`](subprojects/l5wall/README.md)，当前版本 `0.2.0`、覆盖等级 C1，拥有独立测试、配置检查、回环 `serve` 桥接和威胁模型；原生核心内另有一套共享策略目标的 L5/L7 实现，L5Wall 子项目继续独立演进，不被它替代。
+L5 已按 L4Wall 的方式独立为 [`subprojects/l5wall`](subprojects/l5wall/README.md)，当前版本 `0.2.0`、覆盖等级 C1，拥有独立测试、配置检查、回环 `serve` 桥接、威胁模型和独立发布流；wheel/sdist、`SHA256SUMS` 与 GHCR 镜像见 [L5Wall 发布说明](subprojects/l5wall/docs/RELEASE-NOTES.md)，部署边界见 [部署文档](subprojects/l5wall/docs/DEPLOYMENT.md)。原生核心内另有一套共享策略目标的 L5/L7 实现，L5Wall 子项目继续独立演进，不被它替代。
 
 DSH 子系统 AI Agent 已完成首轮独立验收：0 Critical、0 High、3 Medium、8 Low、3 信息项。r2/r3、r5 和 r6 定向复测随后完成；r5 的 8 个指定项中 7 项定向关闭（HWA-01/02/03/07/08/09/10），HWA-11 随后在 r6 窄范围独立复测中关闭，线路级 400 + 270、失败回退、上游零命中和审计不泄漏均通过；HWA-04/05/06 本轮未复测。运行进程映像仍无独立取证，H3/UDP 仍绕过 L4Wall，完整生产准入未完成。证据、逐项边界和残余风险见 [docs/DSH-R6-RESULTS-20261101.md](docs/DSH-R6-RESULTS-20261101.md)、[docs/DSH-R5-RESULTS-20261101.md](docs/DSH-R5-RESULTS-20261101.md) 与 [docs/DSH-REMEDIATION-20261101.md](docs/DSH-REMEDIATION-20261101.md)；完整验收范围见 [docs/DSH-SECURITY-ACCEPTANCE.md](docs/DSH-SECURITY-ACCEPTANCE.md)。r5/r6 可以支持人工发布评审，但不等于生产准入，DSH 对生产发布仍建议 no push；本次公开源码和脱敏测试记录已获单独授权。
 

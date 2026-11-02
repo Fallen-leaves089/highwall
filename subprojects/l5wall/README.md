@@ -4,6 +4,19 @@ L5Wall 是 HighWall 仓库中的独立 TLS 会话层子项目，用 Python 3.10+
 
 当前版本：`0.2.0`。覆盖等级：`C1`，**不完整**。它已经能终止 TLS、执行 SNI/ALPN 白名单、TLS 最低版本、mTLS 模式、SNI/Host 一致性校验和有界转发，但没有标准 JA3/JA4、0-RTT 策略、QUIC、H2/H3 检查或握手前 TCP 预算。不要把它写成完整 L5/L7 防护。
 
+## 独立发布与部署
+
+L5Wall 使用自己的版本号和发布流，不跟随 HighWall 的 `v*` 标签：
+
+- 发布标签：`l5wall-v0.2.0`
+- Python 包：`l5wall-0.2.0-py3-none-any.whl`、`l5wall-0.2.0.tar.gz` 和 `SHA256SUMS`
+- 容器镜像：`ghcr.io/fallen-leaves089/l5wall:0.2.0`（`linux/amd64`、`linux/arm64`）
+- 发布工作流：仅 `l5wall-v*` 标签或手动指定已有标签触发
+
+镜像带 cosign keyless 签名、GitHub provenance 和 SBOM attestation。`0.2.0` 是 Alpha、C1、非生产就绪版本，完整边界见 [docs/RELEASE-NOTES.md](docs/RELEASE-NOTES.md)。
+
+主机安装、systemd、容器和 Kubernetes 约束见 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)。特别注意：`serve` 只监听回环，容器不能直接用 bridge 网络加 `-p 18443:18443` 暴露；必须使用 host network 或共享网络命名空间。
+
 ## 边界
 
 ```text
@@ -80,6 +93,6 @@ python -m l5wall serve --config config.example.json
 
 ## 测试
 
-当前 34 项测试覆盖配置拒绝、SNI/ALPN/TLS 版本策略、mTLS 缺证书、通配符边界、真实回环 TLS 握手、正常 H1 转发、SNI/Host 不一致、缺少/重复 Host、非法 Host、TE/CL 混用、超大请求头、未知 ALPN、H2 preface、控制字符、转发字节上限和私钥不进入 inspect 输出。测试证书由 `test_certificates.py` 在 `tests/fixtures/` 运行时生成，目录已被 Git 忽略；这些材料只允许回环测试使用，不能进入生产或发布包。测试生成器需要开发依赖 `cryptography`，L5Wall 运行时本身仍为零第三方依赖。
+当前 36 项测试覆盖配置拒绝、SNI/ALPN/TLS 版本策略、mTLS 缺证书、通配符边界、真实回环 TLS 握手、正常 H1 转发、SNI/Host 不一致、缺少/重复 Host、非法 Host、TE/CL 混用、超大请求头、未知 ALPN、H2 preface、控制字符、转发字节上限、私钥不进入 inspect 输出，以及包版本/许可证与仓库根的一致性。测试证书由 `test_certificates.py` 在 `tests/fixtures/` 运行时生成，目录已被 Git 忽略；这些材料只允许回环测试使用，不能进入生产或发布包。测试生成器需要开发依赖 `cryptography`，L5Wall 运行时本身仍为零第三方依赖。发布前用 `scripts/check_dist.py` 检查 wheel/sdist 不含测试目录、证书或私钥。
 
 安全边界见 [SECURITY.md](SECURITY.md) 和 [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)。
