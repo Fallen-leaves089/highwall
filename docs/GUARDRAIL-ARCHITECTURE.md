@@ -141,7 +141,7 @@
 
 **L5Wall 子项目**
 
-- L5 建议按 L4Wall 的方式独立为 `subprojects/l5wall`，拥有自己的版本号、测试矩阵、威胁模型、部署说明和发布产物。
+- L5 已按 L4Wall 的方式独立为 `subprojects/l5wall`，拥有自己的版本号、测试矩阵、威胁模型、部署说明和发布产物；`l5wall-v0.2.0` 已通过独立发布流发布 wheel/sdist、SHA256SUMS 和多架构镜像。
 - L5Wall 的职责边界是 TLS/QUIC 终止、SNI、ALPN、mTLS、握手预算、证书生命周期和 L5 指纹；不负责 HTTP 路由、WAF 或 DLP。
 - 对外只暴露版本化的 L5 元数据和决策接口；HighWall/原生 L7 核心不得直接解析 L5Wall 内部状态。
 - B+D-1 可以把它作为独立进程串联；B+D-4 可以把同一模块链接/嵌入原生核心，避免额外网络跳转，但源码和接口边界仍然独立。
@@ -502,7 +502,7 @@ Safe Ops 假设操作者会犯错，AI Agent 会误判，网页、日志、Issue
 - L4Wall：71 个测试通过；真实 PROXY v2 串联通过。
 - 原生核心：143 个 Rust 测试通过；`fmt`、`clippy -D warnings`、release 构建通过。四个独立 release 构建产物均为 SHA256 `85779353214CCF3C6E5DBF8837F9A22E699BB00779BE04A8B17E539375254A29`。
 - DSH r5/r6：均无 Critical/High；r5 定向关闭 HWA-01/02/03/07/08/09/10，HWA-11 由 r6 窄范围关闭；HWA-04/05/06 未在 r5/r6 复测。r5 使用 83 条请求、166 个原始文件，r6 使用 8 个 HTTP 请求和 1 个 TCP 探针。二进制副本哈希经 DSH 重算匹配，但独立进程映像证据仍缺失。
-- Docker daemon 当前不可用，`standard` 容器拓扑和真实边缘验收未执行，不能标记为已验证。
-- 独立 L5Wall：34 个测试通过；`ruff`、`mypy` 和 `l5wall check` 通过；回环 TLS→HighWall 串联已验证。
+- Docker daemon 本机不可用，`standard` 容器拓扑和真实边缘验收未执行，不能标记为已验证；L5Wall 独立镜像已由 GitHub Actions 构建并发布，但这不替代拓扑验收。
+- 独立 L5Wall：36 个测试通过；`ruff`、`mypy` 和 `l5wall check` 通过；回环 TLS→HighWall 串联已验证；`l5wall-v0.2.0` 的 wheel/sdist、SHA256SUMS 和多架构镜像已发布，仍为 Alpha/C1、非生产准入。
 
 本快照不改变设计结论，只用于区分已验证基线、设计目标和尚未实现的能力。
