@@ -2,3 +2,7 @@ Dockerfile text eol=lf
 Dockerfile.* text eol=lf
 *.service text eol=lf
 .github/workflows/*.yml text eol=lf
+LICENSE text eol=lf
+NOTICE text eol=lf
+subprojects/*/LICENSE text eol=lf
+subprojects/*/NOTICE text eol=lf

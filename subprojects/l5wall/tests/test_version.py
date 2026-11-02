@@ -23,8 +23,8 @@ class VersionTests(unittest.TestCase):
         for name in ("LICENSE", "NOTICE"):
             with self.subTest(name=name):
                 self.assertEqual(
-                    (PROJECT_ROOT / name).read_bytes(),
-                    (REPOSITORY_ROOT / name).read_bytes(),
+                    (PROJECT_ROOT / name).read_text(encoding="utf-8").replace("\r\n", "\n"),
+                    (REPOSITORY_ROOT / name).read_text(encoding="utf-8").replace("\r\n", "\n"),
                 )
 
 

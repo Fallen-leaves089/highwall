@@ -79,35 +79,54 @@ async fn h2_request_reaches_gateway_and_upstream() {
 
 #[tokio::test]
 async fn h1_head_response_without_body_is_forwarded_as_success() {
-    let upstream = spawn_raw_h1_upstream(
-        b"HTTP/1.1 200 OK\r\nContent-Length: 2048\r\nConnection: close\r\n\r\n".to_vec(),
-    )
-    .await
-    .0;
-    let state = test_state_with(upstream, |config| {
-        config.routes[0].methods.push("HEAD".to_string());
-    })
-    .await;
-    let (mut client_io, server_io) = tokio::io::duplex(64 * 1024);
-    let server = tokio::spawn(h1_server::serve_connection(
-        server_io,
-        "127.0.0.1:40001".parse().unwrap(),
-        tls_info("http/1.1"),
-        state,
-    ));
-    client_io
-        .write_all(b"HEAD /ok HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
-        .await
-        .unwrap();
-    let mut response = Vec::new();
-    timeout(Duration::from_secs(5), client_io.read_to_end(&mut response))
-        .await
-        .unwrap()
-        .unwrap();
-    let response = String::from_utf8_lossy(&response);
-    assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-    assert!(response.contains("Content-Length: 2048"), "{response}");
-    server.await.unwrap().unwrap();
+    for (path, content_length) in [
+        ("/ok", 2048),
+        ("/status/200", 6),
+        ("/large", 2 * 1024 * 1024),
+        ("/echo", 0),
+    ] {
+        let upstream_response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {content_length}\r\nConnection: close\r\n\r\n"
+        )
+        .into_bytes();
+        let (upstream, upstream_hits) = spawn_raw_h1_upstream(upstream_response).await;
+        let state = test_state_with(upstream, |config| {
+            config.routes[0].path_prefix = "/".to_string();
+            config.routes[0].methods.push("HEAD".to_string());
+        })
+        .await;
+        let (mut client_io, server_io) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(h1_server::serve_connection(
+            server_io,
+            "127.0.0.1:40001".parse().unwrap(),
+            tls_info("http/1.1"),
+            state,
+        ));
+        client_io
+            .write_all(
+                format!("HEAD {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .await
+            .unwrap();
+        let mut response = Vec::new();
+        timeout(Duration::from_secs(5), client_io.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(response.starts_with("HTTP/1.1 200"), "{path}: {response}");
+        assert!(
+            response.contains(&format!("Content-Length: {content_length}")),
+            "{path}: {response}"
+        );
+        let (_, body) = response
+            .split_once("\r\n\r\n")
+            .unwrap_or_else(|| panic!("{path}: response head was not terminated"));
+        assert!(body.is_empty(), "{path}: HEAD response carried a body");
+        assert_eq!(upstream_hits.load(Ordering::SeqCst), 1, "{path}");
+        server.await.unwrap().unwrap();
+    }
 }
 
 #[tokio::test]

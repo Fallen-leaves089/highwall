@@ -2,7 +2,7 @@
 
 FROM rust:1.97.1-bookworm AS builder
 
-ARG HIGHWALL_VERSION=0.1.0-dev.0
+ARG HIGHWALL_VERSION=0.12.0
 ARG HIGHWALL_REVISION=unknown
 
 WORKDIR /build
@@ -17,7 +17,7 @@ RUN cargo build --release --locked --bin highwall-native-core
 
 FROM debian:bookworm-slim
 
-ARG HIGHWALL_VERSION=0.1.0-dev.0
+ARG HIGHWALL_VERSION=0.12.0
 ARG HIGHWALL_REVISION=unknown
 
 LABEL org.opencontainers.image.title="HighWall Native Core" \

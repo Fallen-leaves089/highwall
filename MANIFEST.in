@@ -3,7 +3,16 @@ recursive-include docs *.md
 recursive-include deploy *
 recursive-include scripts *.ps1 *.py
 recursive-include tests *.py
-recursive-include subprojects *.py *.md *.json *.ps1
+recursive-include subprojects *.py *.md *.ps1
+include subprojects/l4wall/config.example.json
+include subprojects/l5wall/config.example.json
+include subprojects/native-core/config.example.json
 global-exclude __pycache__ *.py[cod] *.egg-info
 prune build
 prune dist
+prune subprojects/native-core/target
+prune subprojects/native-core/target-hwa11-r6
+prune subprojects/native-core/target-repro
+prune subprojects/l5wall/build
+prune subprojects/l5wall/l5wall.egg-info
+prune subprojects/l4wall/l4wall.egg-info
