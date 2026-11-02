@@ -215,7 +215,7 @@ jobs:
         run: |
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
-            gh release edit "$TAG" --title "L5Wall $VERSION" --notes-file release-notes.md
+            gh release edit "$TAG" --title "L5Wall $VERSION" --notes-file release-notes.md --latest=false
           else
-            gh release create "$TAG" dist/* --verify-tag --title "L5Wall $VERSION" --notes-file release-notes.md
+            gh release create "$TAG" dist/* --verify-tag --title "L5Wall $VERSION" --notes-file release-notes.md --latest=false
           fi
