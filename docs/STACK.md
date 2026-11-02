@@ -364,14 +364,14 @@ Python `Dockerfile` 只包含 Python H1 基线；`Dockerfile.native` 才包含 R
 |---|---|---|
 | L4Wall lite | 已实现 | 71 个测试、演示、配置校验通过 |
 | L4+L7 回环攻防验收 | 已实现 | 26 项端到端测试；真实 TCP 串联 L4Wall/HighWall/模拟上游 |
-| 原生 B+D-4 数据面 | 已实现 | Rust 143 项测试通过；真实 TCP/UDP 监听器、TLS/QUIC、H1/H2/H3、PROXY v2、Retry、未知 ALPN、0-RTT、迁移和 ACL 有覆盖 |
+| 原生 B+D-4 数据面 | 已实现 | Rust 144 项测试通过；真实 TCP/UDP 监听器、TLS/QUIC、H1/H2/H3、PROXY v2、Retry、未知 ALPN、0-RTT、迁移和 ACL 有覆盖 |
 | 原生独立镜像 | 已定义，未构建验证 | `Dockerfile.native` 多阶段构建、非 root；当前 Docker daemon 不可用，未本地验证，也未发布 GHCR |
 | L4Wall→原生核心真实串联 | 已实现 | 显式开启后 1 项通过；验证 PROXY v2 真实来源链 |
 | 根 Python 回归与覆盖率 | 已实现 | 全量回归通过；原生真实串联默认跳过，显式开启后单独通过；分支覆盖率 81% |
-| L5Wall 子项目 | 已实现 C1 | 34 个测试通过；回环 H1 桥接，不声明 H2/H3 |
+| L5Wall 子项目 | 已实现 C1 | 36 个测试通过；回环 H1 桥接，不声明 H2/H3 |
 | H2/H3/WebSocket/gRPC | 原生 C3，部分 C4 未覆盖 | H1/H2/H3 请求/响应、有界正文、压缩、trailers 和 gRPC 有测试；r5 定向关闭 HWA-08/09/10，r6 在窄范围关闭 HWA-11；真实 WebSocket 端到端、QPACK 阻塞和流式背压饱和仍待补 |
 | 标准容器拓扑攻防验收 | 未验证 | Docker daemon 不可用；未做容器、HAProxy、TLS、HTTP/2、WebSocket 的真实拓扑 |
-| DSH 独立安全验收 | r5/r6 定向关闭 8/8，完整验收未完成 | 首轮 0 Critical / 0 High / 3 Medium / 8 Low / 3 信息项；r5 的 HWA-01/02/03/07/08/09/10 定向关闭，HWA-11 在 r6 窄范围关闭；HWA-04/05/06 未在 r5/r6 复测；H3 绕过 L4Wall、封禁后握手成本、完整 WS/gRPC/流控/管理面等仍未关闭 |
+| DSH 独立安全验收 | r5/r6 定向关闭 8/8，完整验收未完成 | 首轮 0 Critical / 0 High / 3 Medium / 8 Low / 3 信息项；r5 的 HWA-01/02/03/07/08/09/10 定向关闭，HWA-11 在 r6 窄范围关闭；HWA-04/05/06 仅由维护者 r7 回归，仍未经 DSH 独立复测；H3 绕过 L4Wall、封禁后握手成本、完整 WS/gRPC/流控/管理面等仍未关闭 |
 | L4Wall 子项目迁移 | 已完成 | `subprojects/l4wall` |
 | 标准部署骨架 | 已提供 | Docker Compose/HAProxy/HighWall 示例；当前环境无 Docker daemon，未做容器级运行验证 |
 | 真实 IP 清洗配置 | 已提供 | HAProxy 删除并重写 XFF |

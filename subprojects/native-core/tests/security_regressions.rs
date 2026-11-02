@@ -61,6 +61,56 @@ async fn h1_ten_kib_header_line_is_rejected_before_upstream() {
 }
 
 #[tokio::test]
+async fn h1_header_line_limit_is_exact_at_the_configured_boundary() {
+    for (line_bytes, expected_status, expected_upstream_hits) in
+        [(8 * 1024, "200", 1), (8 * 1024 + 1, "413", 0)]
+    {
+        let (upstream, upstream_hits) = spawn_counted_h1_upstream().await;
+        let state = test_state_with(upstream, |config| {
+            config.limits.max_head_bytes = 32 * 1024;
+            config.limits.max_header_line_bytes = 8 * 1024;
+        })
+        .await;
+        let (mut client, server_io) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(h1_server::serve_connection(
+            server_io,
+            "127.0.0.1:41008".parse().unwrap(),
+            tls_info("http/1.1"),
+            state,
+        ));
+
+        let value_bytes = line_bytes - "X: ".len();
+        let mut request = b"GET /ok HTTP/1.1\r\nHost: localhost\r\nX: ".to_vec();
+        request.extend(std::iter::repeat_n(b'a', value_bytes));
+        request.extend_from_slice(b"\r\nConnection: close\r\n\r\n");
+        client.write_all(&request).await.unwrap();
+
+        let mut response = Vec::new();
+        timeout(Duration::from_secs(5), client.read_to_end(&mut response))
+            .await
+            .unwrap()
+            .unwrap();
+        let response = String::from_utf8_lossy(&response);
+        assert!(
+            response.starts_with(&format!("HTTP/1.1 {expected_status}")),
+            "line_bytes={line_bytes}: {response}"
+        );
+        if expected_status == "413" {
+            assert!(
+                response.contains("HW-NATIVE-PROTOCOL-001"),
+                "line_bytes={line_bytes}: {response}"
+            );
+        }
+        assert_eq!(
+            upstream_hits.load(Ordering::SeqCst),
+            expected_upstream_hits,
+            "line_bytes={line_bytes}"
+        );
+        let _ = server.await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn h1_chunked_trailers_are_rejected_before_upstream() {
     let (upstream, upstream_hits) = spawn_counted_h1_upstream().await;
     let state = test_state_with(upstream, |config| {
@@ -783,8 +833,20 @@ async fn spawn_h1_upstream_with_body(body: &[u8]) -> (SocketAddr, Arc<AtomicUsiz
             let response = response.clone();
             tokio::spawn(async move {
                 request_hits.fetch_add(1, Ordering::SeqCst);
+                let mut received = Vec::new();
                 let mut buffer = [0_u8; 4096];
-                let _ = stream.read(&mut buffer).await;
+                while received.len() <= 64 * 1024 {
+                    let Ok(read) = stream.read(&mut buffer).await else {
+                        break;
+                    };
+                    if read == 0 {
+                        break;
+                    }
+                    received.extend_from_slice(&buffer[..read]);
+                    if received.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
                 let _ = stream.write_all(&response).await;
             });
         }

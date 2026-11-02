@@ -1,6 +1,6 @@
 # DSH AI Agent 安全验收计划
 
-- 状态：首轮独立验收及 r2/r3/r5/r6 定向复测已完成；完整残余项、人工复核和发布审批尚未完成
+- 状态：首轮独立验收及 r2/r3/r5/r6 定向复测已完成；维护者 r7 已复核 HWA-04/05/06；完整残余项、人工复核和生产发布审批尚未完成
 - 执行者：DSH（DeepSeek Harness）独立 AI Agent
 - 被测对象：HighWall、L4Wall、L5Wall 和目标 B+D-4 原生核心
 - 性质：隔离靶场中的授权对抗测试，不是第三方审计或安全认证
@@ -194,6 +194,7 @@ DSH 报告至少包含：
 - r5 独立定向复测为 0 Critical、0 High；报告和汇总位于 `dsh-evidence/highwall-remediation-r5-20261101/report-r5.md`、`summary-r5.json`，逐项摘要见 [DSH-R5-RESULTS-20261101.md](DSH-R5-RESULTS-20261101.md)。8 个指定项中 7 项定向关闭，HWA-11 为低危 open；HWA-04/05/06 未复测。二进制副本哈希经 DSH 两次只读重算匹配，但 `runtime_process_image_evidence=false`。
 - r5 定向复测只覆盖指定断言，不是完整复验；在该轮 HWA-11 仍为低危 open。H3/UDP 绕过 L4Wall、封禁后握手成本、H2/H3 C3、完整 WebSocket/gRPC、QPACK/流控饱和、管理面/Safe Ops/审计故障和真实容器拓扑仍未关闭或未验收。
 - r6 仅复测 HWA-11：报告和汇总位于 `dsh-evidence/highwall-remediation-r6-20261101/report-r6.md`、`summary-r6.json`，SHA256 分别为 `7D69900B1B02FB13F56C70FB4E5450D20881C68264B7CCC37439811625E2B102`、`8272FA65146DD7D27F611EE5E337F0B80CE9B003A4A52E0CBA5D82F033159517`。A–E 全部通过：400 + 270、失败回退、上游零命中、审计规则正确且原始主机值泄漏 0；状态为 **closed (narrow HWA-11 retest only)**。`process_image_independent_attestation=false`，不能据此证明运行进程映像或完成生产准入。
+- 维护者 r7（2026-11-02）对 HWA-04/05/06 执行仓库内定向回归：重复 H3 伪头部均为 270 + 上游零命中，四个 HEAD 路由均保留正确长度且正文 0 B，H1 单行头部 8192/8193 B 边界分别为 200/413。详见 [REGRESSION-R7-20261102.md](REGRESSION-R7-20261102.md)。该结果不是 DSH 独立复测，不改变上述独立状态和生产发布 no-push 结论。
 - 发布评审前仍必须由维护者阅读原始证据、抽查复现，并对 AI 结论做人工复核；不能只凭 23/23、r5 的 7/8 或 r6 的 HWA-11 `closed` 进入生产发布。DSH 对生产发布的 no push 建议保持不变；本次仅获得公开源码和脱敏测试记录的推送授权。
 - r5/r6 收尾已停止一次性上游、原生核心、L4Wall、DSH supervisor/web 和专用 headless 浏览器，DSH 切回 `locked`；18443/18444/18445 TCP、18443 UDP、3080 和 9333 均已复核为无监听。原始运行目录、构建缓存、测试证书/私钥和一次性浏览器配置未纳入公开仓库，也没有上传或压缩；具体清理记录保留在未发布的维护者快照中。
 

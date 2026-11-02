@@ -6,7 +6,7 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP 应用层反向代理与防护网关**。它保留零第三方依赖的 Python HTTP/1.1 基线，同时提供 Rust 原生 B+D-4 数据面，目标是让应用入口的解析、策略、资源限制和审计可验证、可回归。
 
-当前源码：`0.12.0.dev0`（未发布）；最新发布版本：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查；v0.12 进入护栏阶段，加入精确 IP 执法键、Safe Ops 只读预演、运行时能力清单、独立 L5Wall 子项目、L4Wall PROXY v2 真实来源链和原生 B+D-4 数据面。原生核心已覆盖 TLS/QUIC、H1/H2/H3、H1 WebSocket、H2/H3 gRPC、有界正文 WAF/DLP 和 QUIC 来源 ACL，H1/H2/H3 按 C3 声明，C4 仍有未覆盖项。DSH 已完成首轮、r5 与 r6 定向独立复测：0 Critical、0 High；r5 的 8 个定向项中 7 项关闭，HWA-11 随后在 r6 窄范围复测中关闭；完整生产准入尚未完成，因此它仍不是已经完成第三方审计或生产准入的产品。
+当前源码：`0.12.0`（`v0.12.0` Alpha 预发布）；最新稳定版：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查；v0.12 进入护栏阶段，加入精确 IP 执法键、Safe Ops 只读预演、运行时能力清单、独立 L5Wall 子项目、L4Wall PROXY v2 真实来源链和原生 B+D-4 数据面。原生核心已覆盖 TLS/QUIC、H1/H2/H3、H1 WebSocket、H2/H3 gRPC、有界正文 WAF/DLP 和 QUIC 来源 ACL，H1/H2/H3 按 C3 声明，C4 仍有未覆盖项。DSH 已完成首轮、r5 与 r6 定向独立复测：0 Critical、0 High；r5 的 8 个定向项中 7 项关闭，HWA-11 随后在 r6 窄范围复测中关闭；维护者 r7 又对 HWA-04/05/06 做了可重复定向回归。完整生产准入尚未完成，因此它仍不是已经完成第三方审计或生产准入的产品。
 
 > **v0.12 重点**：L4Wall 继续负责 TCP 连接准入、限速、字节上限和封禁；Python HighWall 保留 H1 基线和策略工具；Rust 原生 B+D-4 数据面负责 TLS/QUIC、H1/H2/H3 和有界正文检查。上线前先用 [docs/STACK.md](docs/STACK.md) 核对入口、直连封堵、真实客户端 IP 和 TCP/UDP 分叉。
 
@@ -41,7 +41,7 @@ HighWall 把入口处最容易出错的解析、默认拒绝、资源上限、�
 - 不适合：抗大流量 DDoS、代理 WebSocket/HTTP/2，或替代应用自身的认证授权。
 - 复合部署：仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.md)；标准形态、旁路规则和验收方法见 [docs/STACK.md](docs/STACK.md)。
 
-> HighWall 当前开发版为 `0.12.0.dev0`，最新发布仍为 `0.11.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
+> HighWall 当前发布为 `0.12.0` Alpha 预发布，最新稳定版仍为 `0.11.0`，尚未经过独立第三方安全审计。生产使用前请先读 [它不解决什么](#它不解决什么) 和 [部署原则](#部署原则)。
 
 > **防护边界**：WAF、DLP、行为评分和蜜罐都是降低暴露面的启发式，不是认证或安全边界；同主机、同命名空间或已失陷客户端无法靠它们区分，DLP 也不能承诺“防泄漏”。
 
@@ -316,7 +316,7 @@ HighWall 仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.m
 
 ## L5/H2/H3 与原生 B+D-4
 
-原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前版本 `0.1.0-dev.0`。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。
+原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前版本 `0.12.0`。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。
 
 当前 H1/H2/H3 按 C3 声明，C4 尚未声明：标准 JA3/JA4、真实 WebSocket 端到端、QPACK 阻塞、流式背压饱和和部分 slow-flow 攻击仍属未覆盖项。精确 IP 封禁、Safe Ops 只读预演和独立 L5Wall `0.2.0` 也已落地；L5Wall 仍为 C1，提供 TLS 终止、会话策略和有界 H1 回环桥接。Safe Ops 还没有执行器，R2/R3 保持默认拒绝。
 
@@ -354,10 +354,10 @@ upstream application (ideally loopback or private network)
 
 要求 Windows PowerShell 5.1 或更新版本、Python 3.10 或更新版本，不安装第三方依赖。
 
-不想使用源码检出时，可从 [v0.11.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0) 下载 wheel/sdist 和 `SHA256SUMS`，校验后安装：
+不想使用源码检出时，可从 [v0.12.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.12.0) 下载 wheel/sdist、原生二进制和 `SHA256SUMS`，校验后安装：
 
 ```bash
-python -m pip install highwall-0.11.0-py3-none-any.whl
+python -m pip install highwall-0.12.0-py3-none-any.whl
 ```
 
 ```powershell
@@ -424,10 +424,10 @@ curl.exe -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" "http://127.0.0.1:
 
 Docker 镜像和 Compose 是**可选的交付方式**，不是运行、测试或 DSH 验收的前置条件。当前可以直接使用 Rust/Python 原生可执行文件完成本地和隔离靶场验证；只有需要容器隔离、统一打包或多节点编排时才需要 Docker。Docker daemon 不可用不应阻塞原生链路，也不应通过恢复出厂设置来“修复”它。
 
-版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.11.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0)。`0.11.0` 镜像随 tag 发布，并带有 cosign 签名和 GitHub provenance attestation；更早的 `0.9.0` 镜像没有这些证明，不能反向声称已签名。
+版本标签会构建多架构镜像并发布到 GitHub Container Registry（GHCR）。镜像页见 [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall)，版本说明见 [v0.12.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.12.0)。`0.12.0` Alpha 预发布镜像随 tag 发布，并带有 cosign 签名和 GitHub provenance attestation；`0.11.0` 是最新稳定版，`latest` 不会由这个预发布自动移动；更早的 `0.9.0` 镜像没有这些证明，不能反向声称已签名。
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.11.0
+docker pull ghcr.io/fallen-leaves089/highwall:0.12.0
 ```
 
 镜像以 UID `10001` 非 root 运行，默认执行 `python -m highwall serve -c /etc/highwall/config.json`。镜像不内置配置，缺少配置时会直接拒绝启动，不会退化为放行。
@@ -454,19 +454,19 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.11.0
+  ghcr.io/fallen-leaves089/highwall:0.12.0
 ```
 
 - 生产环境启用 TLS 时，把证书和私钥只读挂载到容器内，并在配置中使用容器内路径。
 - 不要暴露管理面端口；管理面默认关闭，开启后也应只在受控网络内访问。
-- `latest` 跟随最近发布的版本标签；生产部署应固定版本号。
+- `latest` 当前仍指向 `0.11.0`；`v0.12.0` 是 Alpha 预发布，不会自动移动 `latest`。生产部署应固定不可变版本号。
 - `v0.10.0` 及之后发布的镜像可用以下命令验证构建来源和签名；验证时把版本号替换为实际部署的不可变 tag：
 
 ```bash
-gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.11.0 \
+gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.12.0 \
   --repo Fallen-leaves089/highwall
 
-cosign verify ghcr.io/fallen-leaves089/highwall:0.11.0 \
+cosign verify ghcr.io/fallen-leaves089/highwall:0.12.0 \
   --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -655,7 +655,7 @@ cd subprojects/l5wall
 python -m unittest discover -s tests -v
 ```
 
-原生核心使用 Rust 工具链独立验证。`cargo test --all-targets --locked` 当前 143 项通过，覆盖真实 TCP/TLS/QUIC/H1/H2/H3 监听器、PROXY v2、Retry、未知 ALPN、0-RTT、连接迁移、WAF/DLP、gRPC/trailers 和资源预算：
+原生核心使用 Rust 工具链独立验证。`cargo test --all-targets --locked` 当前 144 项通过，覆盖真实 TCP/TLS/QUIC/H1/H2/H3 监听器、PROXY v2、Retry、未知 ALPN、0-RTT、连接迁移、WAF/DLP、gRPC/trailers 和资源预算：
 
 ```powershell
 cd subprojects/native-core

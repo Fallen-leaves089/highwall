@@ -1,9 +1,9 @@
 # HighWall Threat Model
 
-版本：`0.12.0.dev0`（未发布）
+版本：`0.12.0`（Alpha 预发布）
 范围：HighWall 进程及其 HTTP 入口、上游连接、审计和管理面。
 
-> 本文描述 0.12.0.dev0 的实际安全边界。精确 IP 执法封禁、Safe Ops 只读预演、L5Wall `0.2.0`（C1，含回环 H1 桥接）和原生 B+D-4 的 H1/H2/H3 C3 数据面已经落地；完整 L5/标准 JA3/JA4、真实 WebSocket/gRPC 端到端、QPACK/流控饱和、AI Agent 分级处置、Safe Ops 执行器、完整容器拓扑和 DSH 完整残余项仍属于目标设计或未验收范围，见 [GUARDRAIL-ARCHITECTURE.md](GUARDRAIL-ARCHITECTURE.md)、[DSH-R6-RESULTS-20261101.md](DSH-R6-RESULTS-20261101.md)、[DSH-R5-RESULTS-20261101.md](DSH-R5-RESULTS-20261101.md) 与 [DSH-REMEDIATION-20261101.md](DSH-REMEDIATION-20261101.md)。不得把目标能力写成已实现。
+> 本文描述 0.12.0 的实际安全边界。精确 IP 执法封禁、Safe Ops 只读预演、L5Wall `0.2.0`（C1，含回环 H1 桥接）和原生 B+D-4 的 H1/H2/H3 C3 数据面已经落地；完整 L5/标准 JA3/JA4、真实 WebSocket/gRPC 端到端、QPACK/流控饱和、AI Agent 分级处置、Safe Ops 执行器、完整容器拓扑和 DSH 完整残余项仍属于目标设计或未验收范围，见 [GUARDRAIL-ARCHITECTURE.md](GUARDRAIL-ARCHITECTURE.md)、[REGRESSION-R7-20261102.md](REGRESSION-R7-20261102.md)、[DSH-R6-RESULTS-20261101.md](DSH-R6-RESULTS-20261101.md)、[DSH-R5-RESULTS-20261101.md](DSH-R5-RESULTS-20261101.md) 与 [DSH-REMEDIATION-20261101.md](DSH-REMEDIATION-20261101.md)。不得把目标能力写成已实现。
 
 ## 1. 安全目标
 

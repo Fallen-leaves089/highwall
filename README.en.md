@@ -6,7 +6,7 @@ English | [简体中文](README.md)
 
 HighWall is a **fail-closed application-layer reverse proxy and security gateway**. It keeps a zero-dependency Python HTTP/1.1 baseline and also provides a Rust native B+D-4 data plane for TLS/QUIC and HTTP/1.1, HTTP/2, and HTTP/3. The goal is to make parsing, policy, resource limits, and audit decisions at the application entry point verifiable and regression-tested.
 
-Current source: `0.12.0.dev0` (unreleased); latest published version: `0.11.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 added atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics; v0.10 added `highwall diff` preflight, CI lint/type/coverage gates, CodeQL, Dependabot, and signed/attested release images; v0.11 added the standalone L4Wall connection-level protection subproject, a standard composite deployment skeleton, a reproducible live attack range, and tighter in-flight 503 auditing and release redaction checks; v0.12 adds exact-IP enforcement keys, read-only Safe Ops planning, a runtime capability manifest, the standalone L5Wall subproject, the L4Wall PROXY v2 source chain, and the Rust native B+D-4 data plane. The native core covers TLS/QUIC, H1/H2/H3, H1 WebSocket, H2/H3 gRPC, bounded-body WAF/DLP, and a QUIC client-network ACL; H1/H2/H3 are declared C3 and C4 still has uncovered items. DSH completed the first independent acceptance pass, an r5 directed retest, and an r6 narrow HWA-11 retest: 0 Critical, 0 High; seven of eight r5 scoped items closed, and HWA-11 subsequently closed in r6. Full production admission is not complete, so this is still not a product that has completed third-party audit or production admission.
+Current source: `0.12.0` (`v0.12.0` Alpha pre-release); latest stable version: `0.11.0`. v0.3 expanded the protection goal from response leakage prevention to **confidentiality, integrity, and availability** together; v0.4 added configurable exact-path honeypots, first-hit bans, and bounded delays; v0.5 added built-in honeypot templates and preset groups; v0.6 added configuration generation, effective-value inspection, and local quick deployment; v0.7 tightened path normalization, request-body encoding, response DLP, and audit redaction, and added route-level rate limits and TLS HSTS; v0.8 added multi-signal attacker fingerprints, persistent marks, two-stage containment, L7 DDoS alerts, and asynchronous webhooks; v0.9 added atomic configuration reload, TLS certificate rotation, graceful drain, and reload-generation metrics; v0.10 added `highwall diff` preflight, CI lint/type/coverage gates, CodeQL, Dependabot, and signed/attested release images; v0.11 added the standalone L4Wall connection-level protection subproject, a standard composite deployment skeleton, a reproducible live attack range, and tighter in-flight 503 auditing and release redaction checks; v0.12 adds exact-IP enforcement keys, read-only Safe Ops planning, a runtime capability manifest, the standalone L5Wall subproject, the L4Wall PROXY v2 source chain, and the Rust native B+D-4 data plane. The native core covers TLS/QUIC, H1/H2/H3, H1 WebSocket, H2/H3 gRPC, bounded-body WAF/DLP, and a QUIC client-network ACL; H1/H2/H3 are declared C3 and C4 still has uncovered items. DSH completed the first independent acceptance pass, an r5 directed retest, and an r6 narrow HWA-11 retest: 0 Critical, 0 High; seven of eight r5 scoped items closed, and HWA-11 subsequently closed in r6. A maintainer r7 regression repeated HWA-04/05/06. Full production admission is not complete, so this is still not a product that has completed third-party audit or production admission.
 
 > **v0.12 focus**: L4Wall continues to handle TCP connection admission, rate limits, byte caps, and bans; the Python HighWall process remains the H1 baseline and policy toolkit; the Rust native B+D-4 data plane handles TLS/QUIC, H1/H2/H3, and bounded-body inspection. Before go-live, verify ingress ownership, direct-access blocking, trusted client IPs, and the TCP/UDP split using [docs/STACK.md](docs/STACK.md).
 
@@ -39,7 +39,7 @@ HighWall puts strict request parsing, default-deny policy, resource limits, audi
 - Not a fit: large-scale DDoS scrubbing or replacing application authentication and authorization. The Python baseline does not proxy WebSocket or HTTP/2; use the native core for H1 WebSocket and H2/H3 application traffic.
 - Composite deployment: this repository includes the independent [L4Wall](subprojects/l4wall/README.md) subproject and the Rust [native core](subprojects/native-core/README.md). See [docs/STACK.md](docs/STACK.md) for the standard topology, bypass rules, TCP/UDP split, and verification.
 
-> HighWall's current development version is `0.12.0.dev0`; the latest published version remains `0.11.0`. It has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
+> HighWall's current release is the `0.12.0` Alpha pre-release; `0.11.0` remains the latest stable version. It has not received an independent security audit. Read [What it does not solve](#what-it-does-not-solve) and [Deployment principles](#deployment-principles) before production use.
 
 > **Protection boundary**: WAF signatures, DLP, behavior scoring, and honeypots are heuristics that reduce exposure. They are not an authentication or security boundary; they cannot distinguish a compromised same-host or same-namespace client, and DLP must not be sold as a leak-prevention guarantee.
 
@@ -313,7 +313,7 @@ Read [docs/STACK.md](docs/STACK.md) before deployment. L4Wall now includes an op
 
 ## L5/H2/H3 architecture
 
-The Rust native B+D-4 data plane lives in [`subprojects/native-core`](subprojects/native-core/README.md) and is currently `0.1.0-dev.0`. It terminates TLS/QUIC and strictly parses H1/H2/H3 in one gateway, with H1 WebSocket, H2/H3 gRPC, compressed bodies and trailers, bounded-body WAF/DLP, exact-IP bans, TLS mTLS/CRL, QUIC Retry, 0-RTT and migration disabled by default, and a QUIC client-network ACL. L4Wall can send standard PROXY v2 for TCP H1/H2; UDP H3 currently reaches the native QUIC listener directly. This TCP/UDP split must be understood explicitly during deployment.
+The Rust native B+D-4 data plane lives in [`subprojects/native-core`](subprojects/native-core/README.md) and is currently `0.12.0`. It terminates TLS/QUIC and strictly parses H1/H2/H3 in one gateway, with H1 WebSocket, H2/H3 gRPC, compressed bodies and trailers, bounded-body WAF/DLP, exact-IP bans, TLS mTLS/CRL, QUIC Retry, 0-RTT and migration disabled by default, and a QUIC client-network ACL. L4Wall can send standard PROXY v2 for TCP H1/H2; UDP H3 currently reaches the native QUIC listener directly. This TCP/UDP split must be understood explicitly during deployment.
 
 H1/H2/H3 are currently declared C3. C4 is not claimed: standardized JA3/JA4, real end-to-end WebSocket coverage, QPACK blocking, streaming backpressure saturation, and some slow-flow attacks remain uncovered. The standalone L5Wall `0.2.0` subproject remains C1 and provides TLS termination, session policy, and a bounded loopback H1 bridge. Safe Ops has no executor and keeps R2/R3 denied by default.
 
@@ -356,10 +356,10 @@ The native listener rejects unknown ALPN, validates SNI against Host where confi
 
 Requirements: Windows PowerShell 5.1 or newer and Python 3.10 or newer. There are no third-party dependencies.
 
-If you do not want a source checkout, download the wheel/sdist and `SHA256SUMS` from the [v0.11.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0), verify them, and install:
+If you do not want a source checkout, download the wheel/sdist, native binaries, and `SHA256SUMS` from the [v0.12.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.12.0), verify them, and install:
 
 ```bash
-python -m pip install highwall-0.11.0-py3-none-any.whl
+python -m pip install highwall-0.12.0-py3-none-any.whl
 ```
 
 ```powershell
@@ -426,10 +426,10 @@ The admin token is read only from the environment. Do not put it in `config.json
 
 Docker images and Compose are **optional delivery formats**, not prerequisites for running, testing, or DSH acceptance. The native Rust/Python executables can be used directly for local and isolated-lab validation. Docker is only needed for container isolation, standardized packaging, or multi-node orchestration. A broken Docker daemon must not block the native path, and factory reset is not an acceptable workaround.
 
-Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.11.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0). The `0.11.0` image is published from the tag with a cosign signature and GitHub provenance attestation; the earlier `0.9.0` image does not have these attestations and must not be described as signed.
+Version tags build multi-architecture images and publish them to the GitHub Container Registry (GHCR). See the [HighWall GHCR package](https://github.com/Fallen-leaves089/highwall/pkgs/container/highwall) and the [v0.12.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.12.0). The `0.12.0` Alpha pre-release image is published from the tag with a cosign signature and GitHub provenance attestation; `0.11.0` remains the latest stable version and `latest` is not moved by this pre-release. The earlier `0.9.0` image does not have these attestations and must not be described as signed.
 
 ```bash
-docker pull ghcr.io/fallen-leaves089/highwall:0.11.0
+docker pull ghcr.io/fallen-leaves089/highwall:0.12.0
 ```
 
 The image runs as non-root UID `10001` and starts `python -m highwall serve -c /etc/highwall/config.json` by default. No configuration is baked into the image. Without a mounted configuration, startup fails closed instead of falling back to an open policy.
@@ -456,19 +456,19 @@ docker run --rm --name highwall \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   -v "${PWD}/config.json:/etc/highwall/config.json:ro" \
   -v highwall-data:/var/lib/highwall \
-  ghcr.io/fallen-leaves089/highwall:0.11.0
+  ghcr.io/fallen-leaves089/highwall:0.12.0
 ```
 
 - For TLS in production, mount the certificate and private key read-only and reference their in-container paths from the configuration.
 - Do not expose the admin plane. It is disabled by default; if enabled, keep it on a controlled network.
-- `latest` follows the most recent release tag. Pin an exact version for production deployments.
+- `latest` still points to `0.11.0`; `v0.12.0` is an Alpha pre-release and does not move `latest` automatically. Pin an exact immutable version for production deployments.
 - Images published from `v0.10.0` onward can be verified with the following commands; replace the version with the exact immutable tag you deploy:
 
 ```bash
-gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.11.0 \
+gh attestation verify oci://ghcr.io/fallen-leaves089/highwall:0.12.0 \
   --repo Fallen-leaves089/highwall
 
-cosign verify ghcr.io/fallen-leaves089/highwall:0.11.0 \
+cosign verify ghcr.io/fallen-leaves089/highwall:0.12.0 \
   --certificate-identity-regexp '^https://github.com/Fallen-leaves089/highwall/.github/workflows/container.yml@refs/tags/v' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
@@ -629,7 +629,7 @@ The current suite covers strict parsing, path-parameter and trailing-dot bypasse
 
 The cross-layer loopback attack/defense acceptance suite lives in `tests/test_attack_defense.py`. It chains a real L4Wall, HighWall, and a stub upstream over TCP and covers L4 bans/rate limits/timeouts, shared-ban failure isolation, L7 Host/smuggling/traversal/WAF/DLP/CSRF/XFF, and the direct-to-HighWall/upstream bypass boundary. See [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md) for the full matrix, measured results, and unverified items.
 
-The native core has Rust unit, protocol, and live-listener tests. All 143 `cargo test --all-targets --locked` cases pass, covering real TCP/TLS/QUIC/H1/H2/H3 listeners, PROXY v2, Retry, unknown ALPN, 0-RTT, connection migration, WAF/DLP, gRPC/trailers, and resource budgets:
+The native core has Rust unit, protocol, and live-listener tests. All 144 `cargo test --all-targets --locked` cases pass, covering real TCP/TLS/QUIC/H1/H2/H3 listeners, PROXY v2, Retry, unknown ALPN, 0-RTT, connection migration, WAF/DLP, gRPC/trailers, and resource budgets:
 
 ```powershell
 cd subprojects/native-core
