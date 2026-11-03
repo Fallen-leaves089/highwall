@@ -54,6 +54,8 @@
 
 下载文件在 [v0.11.0 Release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0) 的 **Assets** 区域。下载后先用 `SHA256SUMS` 校验，再安装：
 
+> **后续发布说明（2026-11-03）**：L4Wall `0.1.0` 已迁移到独立 Release [l4wall-v0.1.0](https://github.com/Fallen-leaves089/highwall/releases/tag/l4wall-v0.1.0)。本页 `v0.11.0` 中的 L4Wall 附件为兼容旧链接而保留，字节未变；新下载请优先使用独立 Release，其 `SHA256SUMS` 只包含 L4Wall 文件。
+
 ```bash
 python -m pip install highwall-0.11.0-py3-none-any.whl
 python -m pip install l4wall-0.1.0-py3-none-any.whl
