@@ -672,6 +672,8 @@ $env:HIGHWALL_RUN_NATIVE_CHAIN='1'
 python -m unittest tests.test_native_chain -v
 ```
 
+没有 Rust 工具链时，可从 Release 下载并校验 `highwall-native-core-*` 预编译二进制，然后把 `HIGHWALL_NATIVE_CORE_BIN` 指向它，运行同一条串联测试；这可以验证 L4Wall→原生 H1 的真实进程链，但不能替代 H2/H3/gRPC 的 Rust 源码测试，后者仍需 `cargo test` 或 CI 完成。分支上的原生改动必须重新构建二进制，不能把旧 Release 资产当作新代码的验证结果。
+
 跨层回环攻防验收位于 `tests/test_attack_defense.py`：真实 TCP 串联 L4Wall、HighWall 和模拟上游，覆盖 L4 封禁/限速/超时、共享封禁故障隔离、L7 Host/走私/穿越/WAF/DLP/CSRF/XFF，以及直连 HighWall/上游的绕过边界。完整矩阵、实测结果和未验证项见 [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md)。
 
 GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.14 上执行 Ruff、mypy、覆盖率与完整测试；CodeQL 每周和每次 PR 扫描；Dependabot 每周检查 Actions、Python 开发依赖和 Docker 基础镜像。所有第三方 Actions 固定到提交 SHA，发布镜像附带 SBOM、provenance、cosign 签名和 GitHub attestation。
