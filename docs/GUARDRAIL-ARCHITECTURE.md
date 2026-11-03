@@ -2,7 +2,7 @@
 
 - 状态：B+D-4 原生数据面已实现并通过本地/串联回归；DSH 首轮独立验收完成，r5 定向复测为 0 Critical/0 High、7/8 定向关闭，HWA-11 随后在 r6 窄范围定向关闭，维护者 r7 重复 HWA-04/05/06；完整残余项仍未关闭，还不能标记为生产完成
 - 基线版本：`0.12.0`（Alpha 预发布）
-- 更新时间：`2026-11-02`
+- 更新时间：`2026-11-03`
 - 适用范围：HighWall、L4Wall、L5Wall、原生 B+D-4 数据面和标准部署拓扑
 
 ## 0. 结论先行
@@ -141,8 +141,8 @@
 
 **L5Wall 子项目**
 
-- L5 已按 L4Wall 的方式独立为 `subprojects/l5wall`，拥有自己的版本号、测试矩阵、威胁模型、部署说明和发布产物；`l5wall-v0.2.0` 已通过独立发布流发布 wheel/sdist、SHA256SUMS 和多架构镜像。
-- L5Wall 的职责边界是 TLS/QUIC 终止、SNI、ALPN、mTLS、握手预算、证书生命周期和 L5 指纹；不负责 HTTP 路由、WAF 或 DLP。
+- L5 已按 L4Wall 的方式独立为 `subprojects/l5wall`，拥有自己的版本号、测试矩阵、威胁模型、部署说明和发布流；`l5wall-v0.2.1` 已通过独立发布流交付 wheel/sdist、SHA256SUMS 和多架构镜像，修复了瞬时 accept 错误导致监听器退出及重连风暴问题。
+- L5Wall 的目标职责边界是 TLS/QUIC 终止、SNI、ALPN、mTLS、握手预算、证书生命周期和 L5 指纹；当前 `0.2.1` 只实现 TLS 终止，QUIC 由原生核心承接，它不负责 HTTP 路由、WAF 或 DLP。
 - 对外只暴露版本化的 L5 元数据和决策接口；HighWall/原生 L7 核心不得直接解析 L5Wall 内部状态。
 - B+D-1 可以把它作为独立进程串联；B+D-4 可以把同一模块链接/嵌入原生核心，避免额外网络跳转，但源码和接口边界仍然独立。
 - L5Wall 必须先于边缘代理声明“谁终止 TLS”；如果 HAProxy/Envoy 已经终止 TLS，L5Wall 不能再声称拿到真实客户端指纹。
@@ -500,9 +500,9 @@ Safe Ops 假设操作者会犯错，AI Agent 会误判，网页、日志、Issue
 - `mypy`：通过，30 个源文件无问题。
 - `compileall`、`highwall check -c config.example.json`、`highwall diff`：通过；示例配置仍有预期的中等风险警告，不是生产配置。
 - L4Wall：71 个测试通过；真实 PROXY v2 串联通过。
-- 原生核心：144 个 Rust 测试通过；`fmt`、`clippy -D warnings`、release 构建通过。0.12.0 发布资产哈希以 GitHub Release 的 `SHA256SUMS` 和 build provenance 为准；历史 r5 哈希只对应旧快照，不能用于本候选。
+- 原生核心：148 个 Rust 测试通过；`fmt`、`clippy -D warnings`、release 构建通过。0.12.0 发布资产哈希以 GitHub Release 的 `SHA256SUMS` 和 build provenance 为准；历史 r5 哈希只对应旧快照，不能用于本候选。
 - DSH r5/r6：均无 Critical/High；r5 定向关闭 HWA-01/02/03/07/08/09/10，HWA-11 由 r6 窄范围关闭；HWA-04/05/06 未在 r5/r6 复测。r5 使用 83 条请求、166 个原始文件，r6 使用 8 个 HTTP 请求和 1 个 TCP 探针。二进制副本哈希经 DSH 重算匹配，但独立进程映像证据仍缺失。
 - Docker daemon 本机不可用，`standard` 容器拓扑和真实边缘验收未执行，不能标记为已验证；L5Wall 独立镜像已由 GitHub Actions 构建并发布，但这不替代拓扑验收。
-- 独立 L5Wall：36 个测试通过；`ruff`、`mypy` 和 `l5wall check` 通过；回环 TLS→HighWall 串联已验证；`l5wall-v0.2.0` 的 wheel/sdist、SHA256SUMS 和多架构镜像已发布，仍为 Alpha/C1、非生产准入。
+- 独立 L5Wall：42 个测试通过；`ruff`、`mypy` 和 `l5wall check` 通过；瞬时/致命 accept 故障注入、快速连接风暴、在途请求排空与排空超时均有回归；回环 TLS→HighWall 的放行与 L7 拒绝链路均已验证。`l5wall-v0.2.1` 已单独发布，L5Wall 仍为 Alpha/C1、非生产准入。
 
 本快照不改变设计结论，只用于区分已验证基线、设计目标和尚未实现的能力。

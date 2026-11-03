@@ -68,6 +68,13 @@ class L5BridgeIntegrationTests(unittest.TestCase):
         self.assertEqual(body, b"hello from upstream")
         self.assertEqual(len(self.stub.state.snapshot()), 1)
 
+    def test_l7_denied_path_is_still_blocked_after_tls_bridge(self) -> None:
+        response = self._request(b"GET /.git/config HTTP/1.1\r\nHost: localhost\r\n\r\n")
+
+        status, _headers, _body = parse_response(response)
+        self.assertEqual(status, 403)
+        self.assertEqual(self.stub.state.snapshot(), [])
+
     def test_sni_host_mismatch_never_reaches_highwall_or_upstream(self) -> None:
         response = self._request(b"GET /ok HTTP/1.1\r\nHost: wrong.test\r\n\r\n", allow_error=True)
 

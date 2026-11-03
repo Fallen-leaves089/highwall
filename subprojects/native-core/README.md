@@ -32,7 +32,7 @@ cargo test --all-targets --locked
 cargo build --release --locked
 ```
 
-当前 `cargo test --all-targets --locked` 为 144 项通过。
+当前 `cargo test --all-targets --locked` 为 148 项通过。
 
 ## 配置与启动
 

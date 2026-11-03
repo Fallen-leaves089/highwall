@@ -38,6 +38,7 @@ class L5Config:
     max_connections: int = 128
     connect_timeout: float = 5.0
     idle_timeout: float = 30.0
+    shutdown_timeout: float = 8.0
     max_bytes_per_direction: int = 64 * 1024 * 1024
     max_request_head_bytes: int = 32 * 1024
     require_sni_host_match: bool = True
@@ -60,6 +61,7 @@ class L5Config:
             "max_connections": self.max_connections,
             "connect_timeout": self.connect_timeout,
             "idle_timeout": self.idle_timeout,
+            "shutdown_timeout": self.shutdown_timeout,
             "max_bytes_per_direction": self.max_bytes_per_direction,
             "max_request_head_bytes": self.max_request_head_bytes,
             "require_sni_host_match": self.require_sni_host_match,
@@ -112,6 +114,7 @@ def parse_config(value: Any, base_dir: Path) -> L5Config:
         "max_connections",
         "connect_timeout",
         "idle_timeout",
+        "shutdown_timeout",
         "max_bytes_per_direction",
         "max_request_head_bytes",
         "require_sni_host_match",
@@ -178,6 +181,7 @@ def parse_config(value: Any, base_dir: Path) -> L5Config:
     max_connections = _integer(value.get("max_connections", 128), "max_connections", 1, 4096)
     connect_timeout = _number(value.get("connect_timeout", 5.0), "connect_timeout", 0.1, 30.0)
     idle_timeout = _number(value.get("idle_timeout", 30.0), "idle_timeout", 0.1, 300.0)
+    shutdown_timeout = _number(value.get("shutdown_timeout", 8.0), "shutdown_timeout", 0.0, 60.0)
     max_bytes_per_direction = _integer(
         value.get("max_bytes_per_direction", 64 * 1024 * 1024),
         "max_bytes_per_direction",
@@ -211,6 +215,7 @@ def parse_config(value: Any, base_dir: Path) -> L5Config:
         max_connections=max_connections,
         connect_timeout=connect_timeout,
         idle_timeout=idle_timeout,
+        shutdown_timeout=shutdown_timeout,
         max_bytes_per_direction=max_bytes_per_direction,
         max_request_head_bytes=max_request_head_bytes,
         require_sni_host_match=require_sni_host_match,

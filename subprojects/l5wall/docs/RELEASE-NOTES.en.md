@@ -1,8 +1,15 @@
-# L5Wall 0.2.0
+# L5Wall 0.2.1
 
-Release date: 2026-11-02
+Release date: 2026-11-03
 
-L5Wall 0.2.0 is the first standalone service release of L5Wall, the TLS session-layer subproject in the HighWall repository. It has its own version, test matrix, threat model, deployment guide, and release artifacts.
+L5Wall 0.2.1 is a lifecycle-reliability patch release for `0.2.0`. It is the TLS session-layer subproject in the HighWall repository, with its own version, test matrix, threat model, deployment guide, and release workflow.
+
+## Fixes
+
+- The listener no longer treats transient accept failures as an exit signal. `EINTR`, `ECONNABORTED`, Windows socket resets, `EMFILE`/`ENFILE`, and buffer or memory exhaustion are logged and retried with exponential backoff from 50 ms to 1 s; the backoff resets after a successful accept.
+- Fatal accept failures now raise `L5ProxyError` explicitly instead of returning silently and being masked by a supervisor restart policy.
+- On `SIGTERM`, the listener stops accepting new work, drains in-flight connections for up to `shutdown_timeout`, and only then force-closes the remainder. The default is 8 seconds.
+- Regression coverage now includes connection storms, transient and fatal fault injection, in-flight draining, and drain-deadline expiry.
 
 ## Status
 
@@ -14,10 +21,10 @@ It terminates TLS, enforces SNI/ALPN allowlists, minimum TLS versions, mTLS, SNI
 
 ## Artifacts
 
-- `l5wall-0.2.0-py3-none-any.whl`
-- `l5wall-0.2.0.tar.gz`
+- `l5wall-0.2.1-py3-none-any.whl`
+- `l5wall-0.2.1.tar.gz`
 - `SHA256SUMS`
-- `ghcr.io/fallen-leaves089/l5wall:0.2.0` (`linux/amd64`, `linux/arm64`)
+- `ghcr.io/fallen-leaves089/l5wall:0.2.1` (`linux/amd64`, `linux/arm64`)
 
 The image is signed with cosign keyless signing and carries GitHub provenance and SBOM attestations. Verify `SHA256SUMS` before installation.
 
@@ -25,7 +32,7 @@ The image is signed with cosign keyless signing and carries GitHub provenance an
 
 ```bash
 python3 -m venv /opt/l5wall
-/opt/l5wall/bin/pip install --no-cache-dir ./l5wall-0.2.0-py3-none-any.whl
+/opt/l5wall/bin/pip install --no-cache-dir ./l5wall-0.2.1-py3-none-any.whl
 /opt/l5wall/bin/l5wall --version
 ```
 
@@ -40,7 +47,7 @@ See [DEPLOYMENT.md](https://github.com/Fallen-leaves089/highwall/blob/main/subpr
 
 ## Verification
 
-- 36 standard-library `unittest` cases pass.
+- 42 standard-library `unittest` cases pass, including listener fault injection, connection storms, graceful draining, and drain-deadline expiry.
 - `ruff`, `mypy`, and `l5wall check` pass.
 - Wheel/sdist build and installation smoke checks pass; release artifacts contain no test certificates, private keys, or test directories.
 - Certificates, SPDX license metadata, and NOTICE are included.

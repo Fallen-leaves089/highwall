@@ -2,7 +2,7 @@ name: l5wall-host
 
 services:
   l5wall:
-    image: ghcr.io/fallen-leaves089/l5wall:0.2.0
+    image: ghcr.io/fallen-leaves089/l5wall:0.2.1
     container_name: l5wall
     network_mode: host
     read_only: true
@@ -17,3 +17,4 @@ services:
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
+    stop_grace_period: 12s

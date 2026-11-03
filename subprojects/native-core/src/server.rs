@@ -1,11 +1,11 @@
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{io, net::SocketAddr, sync::Arc, time::Duration};
 
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     net::{TcpListener, TcpStream},
     sync::{watch, OwnedSemaphorePermit, Semaphore},
     task::{JoinError, JoinHandle, JoinSet},
-    time::timeout,
+    time::{timeout, Instant},
 };
 use tokio_rustls::server::TlsStream;
 
@@ -26,6 +26,8 @@ const RULE_QUIC_PROTOCOL: &str = "HW-NATIVE-QUIC-001";
 const RULE_QUIC_ACL: &str = "HW-NATIVE-QUIC-ACL-001";
 const RULE_CONNECTION_BUDGET: &str = "HW-NATIVE-CONN-001";
 const RULE_PROXY_PROTOCOL: &str = "HW-NATIVE-PROXY-001";
+const ACCEPT_RETRY_INITIAL: Duration = Duration::from_millis(50);
+const ACCEPT_RETRY_MAX: Duration = Duration::from_secs(1);
 
 pub async fn run(config: AppConfig) -> Result<()> {
     config.validate()?;
@@ -131,7 +133,16 @@ async fn tcp_accept_loop(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let mut tasks = JoinSet::new();
+    let mut retry_at: Option<Instant> = None;
+    let mut accept_backoff = ACCEPT_RETRY_INITIAL;
     loop {
+        let retry_deadline = retry_at;
+        let retry_wait = async move {
+            match retry_deadline {
+                Some(deadline) => tokio::time::sleep_until(deadline).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
         tokio::select! {
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
@@ -143,14 +154,31 @@ async fn tcp_accept_loop(
                     tracing::warn!(error = %error, "TCP connection task failed");
                 }
             }
-            accepted = listener.accept() => {
+            _ = retry_wait, if retry_at.is_some() => {
+                retry_at = None;
+            }
+            accepted = listener.accept(), if retry_at.is_none() => {
                 let (stream, peer) = match accepted {
-                    Ok(value) => value,
+                    Ok(value) => {
+                        accept_backoff = ACCEPT_RETRY_INITIAL;
+                        value
+                    }
                     Err(error) => {
                         if *shutdown.borrow() {
                             break;
                         }
-                        return Err(CoreError::Io(error));
+                        if !is_transient_accept_error(&error) {
+                            return Err(CoreError::Io(error));
+                        }
+                        let delay = accept_backoff;
+                        accept_backoff = next_accept_backoff(accept_backoff);
+                        tracing::warn!(
+                            error = %error,
+                            retry_in_ms = delay.as_millis(),
+                            "transient TCP accept error; retrying"
+                        );
+                        retry_at = Some(Instant::now() + delay);
+                        continue;
                     }
                 };
                 let proxy = &state.config.listen.proxy_protocol;
@@ -224,6 +252,49 @@ async fn tcp_accept_loop(
     .await;
     tasks.abort_all();
     Ok(())
+}
+
+fn next_accept_backoff(current: Duration) -> Duration {
+    current.saturating_mul(2).min(ACCEPT_RETRY_MAX)
+}
+
+fn is_transient_accept_error(error: &io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        io::ErrorKind::Interrupted
+            | io::ErrorKind::WouldBlock
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::OutOfMemory
+    ) {
+        return true;
+    }
+    is_accept_resource_exhaustion(error)
+}
+
+#[cfg(unix)]
+fn is_accept_resource_exhaustion(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(libc::EMFILE | libc::ENFILE | libc::ENOBUFS | libc::ENOMEM)
+    )
+}
+
+#[cfg(windows)]
+fn is_accept_resource_exhaustion(error: &io::Error) -> bool {
+    use windows_sys::Win32::Networking::WinSock::{
+        WSAECONNABORTED, WSAECONNRESET, WSAEINTR, WSAEMFILE, WSAENOBUFS, WSAEWOULDBLOCK,
+    };
+
+    matches!(
+        error.raw_os_error(),
+        Some(WSAEINTR | WSAEWOULDBLOCK | WSAECONNABORTED | WSAECONNRESET | WSAEMFILE | WSAENOBUFS)
+    )
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_accept_resource_exhaustion(_error: &io::Error) -> bool {
+    false
 }
 
 async fn handle_proxied_tcp_connection(
@@ -647,5 +718,51 @@ fn unexpected_task_result(
         ))),
         Ok(Err(error)) => Err(error),
         Err(error) => Err(CoreError::Protocol(format!("{label} task failed: {error}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_known_transient_accept_errors() {
+        for kind in [
+            io::ErrorKind::Interrupted,
+            io::ErrorKind::WouldBlock,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::OutOfMemory,
+        ] {
+            assert!(is_transient_accept_error(&io::Error::from(kind)));
+        }
+        assert!(!is_transient_accept_error(&io::Error::from(
+            io::ErrorKind::PermissionDenied
+        )));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn classifies_unix_file_descriptor_exhaustion() {
+        let error = io::Error::from_raw_os_error(libc::EMFILE);
+        assert!(is_transient_accept_error(&error));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn classifies_windows_socket_exhaustion() {
+        use windows_sys::Win32::Networking::WinSock::WSAEMFILE;
+
+        let error = io::Error::from_raw_os_error(WSAEMFILE);
+        assert!(is_transient_accept_error(&error));
+    }
+
+    #[test]
+    fn accept_backoff_is_bounded() {
+        let mut delay = ACCEPT_RETRY_INITIAL;
+        for _ in 0..16 {
+            delay = next_accept_backoff(delay);
+        }
+        assert_eq!(delay, ACCEPT_RETRY_MAX);
     }
 }
