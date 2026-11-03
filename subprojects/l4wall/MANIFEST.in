@@ -1,0 +1,14 @@
+include LICENSE NOTICE README.md SECURITY.md config.example.json
+prune tests
+prune scripts
+prune docs
+prune deploy
+prune build
+prune dist
+prune l4wall.egg-info
+prune .mypy_cache
+prune .ruff_cache
+prune .pytest_cache
+prune __pycache__
+global-exclude *.py[cod]
+global-exclude .DS_Store

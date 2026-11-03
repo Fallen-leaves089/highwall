@@ -314,6 +314,8 @@ HighWall 仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.m
 
 上线前必须读 [docs/STACK.md](docs/STACK.md)，重点确认：HighWall 和上游没有公网端口、L4Wall 管理面只回环、客户端转发头会被边缘删除并重写、直连 HighWall/上游在攻击者视角下不可达。L4Wall 已实现可选的 Redis 共享封禁读取端；自动发布端、Controller 和多节点 HA 仍在后续里程碑，不能把标准骨架当成完整控制面。
 
+L4Wall `0.1.0` 已作为独立 Release 发布：[l4wall-v0.1.0](https://github.com/Fallen-leaves089/highwall/releases/tag/l4wall-v0.1.0)。该版本原样复用 `v0.11.0` 的历史构建，只有 wheel、sdist 和 L4Wall 专用 `SHA256SUMS` 在 Release Assets 提供；不随 `v0.12.0` 打包，也没有 GHCR 镜像、PyPI 包或其他下载渠道。当前 `main` 上后续加入的 PROXY v2 等 L4Wall 改动不在这个 `0.1.0` 包中，完整说明见 [L4Wall 发布说明](subprojects/l4wall/docs/RELEASE-NOTES.md)。
+
 ## L5/H2/H3 与原生 B+D-4
 
 原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前版本 `0.12.0`。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。

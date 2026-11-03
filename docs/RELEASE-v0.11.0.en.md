@@ -54,6 +54,8 @@ Release date: 2026-10-30
 
 The files are in the **Assets** section of the [v0.11.0 release](https://github.com/Fallen-leaves089/highwall/releases/tag/v0.11.0). Verify them against `SHA256SUMS` before installation:
 
+> **Standalone release update (2026-11-03):** L4Wall `0.1.0` now has its own release at [l4wall-v0.1.0](https://github.com/Fallen-leaves089/highwall/releases/tag/l4wall-v0.1.0). The L4Wall attachments on this `v0.11.0` page remain unchanged for link compatibility. Prefer the standalone release for new downloads; its `SHA256SUMS` contains L4Wall files only.
+
 ```bash
 python -m pip install highwall-0.11.0-py3-none-any.whl
 python -m pip install l4wall-0.1.0-py3-none-any.whl

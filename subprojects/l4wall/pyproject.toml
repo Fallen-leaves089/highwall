@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +7,8 @@ name = "l4wall"
 version = "0.1.0"
 description = "Fail-closed TCP gateway with connection-level defense"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 dependencies = []
 authors = [{ name = "L4Wall contributors" }]
@@ -19,8 +21,17 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Internet :: Proxy Servers",
     "Topic :: Security",
 ]
+
+[project.urls]
+Homepage = "https://github.com/Fallen-leaves089/highwall/tree/main/subprojects/l4wall"
+Repository = "https://github.com/Fallen-leaves089/highwall"
+Issues = "https://github.com/Fallen-leaves089/highwall/issues"
+Security = "https://github.com/Fallen-leaves089/highwall/security/policy"
 
 [project.scripts]
 l4wall = "l4wall.cli:main"
@@ -47,4 +58,3 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 show_error_codes = true
 pretty = true
-
