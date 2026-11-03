@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 FROM python:3.12-slim-bookworm AS builder
 
-ARG L5WALL_VERSION=0.2.0
+ARG L5WALL_VERSION=0.2.1
 ARG L5WALL_REVISION=unknown
 
 WORKDIR /build
@@ -14,7 +14,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools \
 
 FROM python:3.12-slim-bookworm
 
-ARG L5WALL_VERSION=0.2.0
+ARG L5WALL_VERSION=0.2.1
 ARG L5WALL_REVISION=unknown
 
 LABEL org.opencontainers.image.title="L5Wall" \

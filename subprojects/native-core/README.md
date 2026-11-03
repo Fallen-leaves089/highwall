@@ -32,7 +32,9 @@ cargo test --all-targets --locked
 cargo build --release --locked
 ```
 
-当前 `cargo test --all-targets --locked` 为 144 项通过。
+当前 `cargo test --all-targets --locked` 为 148 项通过。
+
+没有 Rust 工具链时，可从 Release 下载已校验的 `highwall-native-core-*` 二进制，并设置 `HIGHWALL_NATIVE_CORE_BIN` 后运行仓库根的 `tests.test_native_chain`。这只覆盖真实 L4Wall→原生 H1 进程链，不能替代 H2/H3/gRPC 的 Rust 源码测试；这些测试必须在 Rust 工具链或 CI 中运行，且分支改动需要重新构建二进制。
 
 ## 配置与启动
 

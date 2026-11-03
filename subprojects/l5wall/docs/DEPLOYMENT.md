@@ -1,10 +1,10 @@
 # L5Wall 独立部署
 
-本文适用于 L5Wall `0.2.0`。它是 **Alpha、覆盖等级 C1、非生产就绪** 的 TLS 会话守卫，不是完整的 L5/L7 防护。
+本文适用于 L5Wall `0.2.1`。它是 **Alpha、覆盖等级 C1、非生产就绪** 的 TLS 会话守卫，不是完整的 L5/L7 防护。
 
 ## 1. 部署拓扑
 
-`0.2.0` 强制 `listen_host` 和 `upstream_host` 都是回环地址，因此推荐的单机拓扑是：
+`0.2.1` 强制 `listen_host` 和 `upstream_host` 都是回环地址，因此推荐的单机拓扑是：
 
 ```text
 客户端
@@ -23,7 +23,7 @@ HighWall H1 数据面或业务上游
 
 - **L5Wall 之前不能有终止 TLS 的代理。** HAProxy/Envoy/CDN 一旦终止 TLS，L5Wall 只能看到内层连接，不能再声称拥有真实客户端握手信息。
 - **L5Wall 是 TLS 终止点。** 它和上游之间是明文 H1 回环链路，不能再跨不可信网络。
-- **不要在这个桥接后面启用按 IP 封禁、来源 ACL 或按真实来源限速。** `0.2.0` 不转发原始客户端 IP，HighWall 看到的来源是 `127.0.0.1`。
+- **不要在这个桥接后面启用按 IP 封禁、来源 ACL 或按真实来源限速。** `0.2.1` 不转发原始客户端 IP，HighWall 看到的来源是 `127.0.0.1`。
 - **只接受 `http/1.1` ALPN。** H2/H3 不会降级伪装成已检查；需要 H2/H3 时使用原生 B+D-4 数据面。
 
 ## 2. 前置条件
@@ -36,7 +36,7 @@ HighWall H1 数据面或业务上游
 
 ## 3. 主机安装（wheel）
 
-从 GitHub Release 下载 `l5wall-0.2.0-py3-none-any.whl` 和 `SHA256SUMS`，先校验：
+从 GitHub Release 下载 `l5wall-0.2.1-py3-none-any.whl` 和 `SHA256SUMS`，先校验：
 
 ```bash
 sha256sum -c SHA256SUMS --ignore-missing
@@ -48,7 +48,7 @@ sha256sum -c SHA256SUMS --ignore-missing
 sudo useradd --system --home /nonexistent --shell /usr/sbin/nologin l5wall
 sudo install -d -o root -g l5wall -m 0750 /opt/l5wall /etc/l5wall /etc/l5wall/tls
 sudo python3 -m venv /opt/l5wall
-sudo /opt/l5wall/bin/pip install --no-cache-dir ./l5wall-0.2.0-py3-none-any.whl
+sudo /opt/l5wall/bin/pip install --no-cache-dir ./l5wall-0.2.1-py3-none-any.whl
 ```
 
 把证书放到 `/etc/l5wall/tls/`，私钥建议 `root:l5wall 0640`，证书 `0644`。配置文件示例见 [`../deploy/l5wall/config.example.json`](../deploy/l5wall/config.example.json)；把 SNI、证书路径和上游端口换成实际值。
@@ -75,13 +75,13 @@ sudo systemctl status l5wall
 
 ## 4. 容器
 
-镜像：`ghcr.io/fallen-leaves089/l5wall:0.2.0`，支持 `linux/amd64` 和 `linux/arm64`，带 cosign 签名、GitHub provenance 和 SBOM attestation。
+镜像：`ghcr.io/fallen-leaves089/l5wall:0.2.1`，支持 `linux/amd64` 和 `linux/arm64`，带 cosign 签名、GitHub provenance 和 SBOM attestation。
 
 ### 为什么不能直接用 `-p 18443:18443`
 
 L5Wall 在容器内监听 `127.0.0.1:18443`。Docker 的端口发布转发到容器网卡地址，不会转发到容器回环地址，所以普通 bridge 网络加 `-p` 会连不上。这不是镜像坏了，而是回环安全约束的直接结果。
 
-`0.2.0` 支持两种容器部署方式：
+`0.2.1` 支持两种容器部署方式：
 
 1. **Linux host network（推荐用于单机验证）**：容器直接使用宿主机回环，见 [`../deploy/docker-compose.host.yml`](../deploy/docker-compose.host.yml)。
 2. **共享网络命名空间**：L5Wall、HighWall 和一个 TCP 入口容器加入同一个 netns；入口容器监听 `0.0.0.0` 并把 TCP 转发到 `127.0.0.1:18443`。不要把入口容器做成 TLS 终止代理。
@@ -95,14 +95,14 @@ docker run --rm --network host \
   -v /etc/l5wall/config.json:/etc/l5wall/config.json:ro \
   -v /etc/l5wall/tls:/etc/l5wall/tls:ro \
   --tmpfs /tmp:size=16m,mode=1777 \
-  ghcr.io/fallen-leaves089/l5wall:0.2.0
+  ghcr.io/fallen-leaves089/l5wall:0.2.1
 ```
 
 镜像自带的 `HEALTHCHECK` 只验证配置和证书可用，不代表监听端口一定可服务；生产监控应另外做 TLS 握手探针。
 
 ### Kubernetes
 
-`0.2.0` 不建议直接用普通 `Service` 暴露：Service 的目标是 Pod IP，而 L5Wall 只监听 Pod 回环。可行方式只有：
+`0.2.1` 不建议直接用普通 `Service` 暴露：Service 的目标是 Pod IP，而 L5Wall 只监听 Pod 回环。可行方式只有：
 
 - `hostNetwork: true` + `hostPort`；或
 - 在同一个 Pod 内增加一个只做 TCP 转发的 sidecar，由它监听 Pod IP 并转发到 `127.0.0.1:18443`。
@@ -113,7 +113,7 @@ docker run --rm --network host \
 
 - 配置加载会拒绝符号链接证书和私钥；不要把证书目录做成指向可变路径的 symlink。
 - 私钥只给运行用户读权限；容器内运行 UID/GID 是 `10001:10001`。
-- 证书轮换需要替换文件后重启 L5Wall；`0.2.0` 不支持热加载证书。
+- 证书轮换需要替换文件后重启 L5Wall；`0.2.1` 不支持热加载证书。
 - 测试证书只允许回环测试，不能进入生产镜像或发布包。
 
 ## 6. 上线检查
@@ -131,7 +131,7 @@ docker run --rm --network host \
 
 - 固定镜像 digest，不要只用 `latest`。
 - 升级前保留上一版 wheel/镜像和配置；先在新端口做 `check`，再切换入口。
-- `0.2.0` 没有优雅排空；收到 `SIGTERM` 时进程退出，在途连接可能被直接关闭。把重启安排在低峰，或在入口层先摘流。
+- `0.2.1` 收到 `SIGTERM` 后停止接受新连接，并在 `shutdown_timeout`（默认 8 秒）内等待在途连接完成；超时才强制关闭剩余连接。服务管理器的停止宽限必须大于 `shutdown_timeout`，例如 systemd `TimeoutStopSec=12` 或 Compose `stop_grace_period: 12s`。
 - 回滚时恢复上一版镜像/ wheel 和配置，重新执行 `check`，再恢复入口流量。
 
 ## 8. 故障排查

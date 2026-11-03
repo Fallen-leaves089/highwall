@@ -315,7 +315,7 @@ Read [docs/STACK.md](docs/STACK.md) before deployment. L4Wall now includes an op
 
 The Rust native B+D-4 data plane lives in [`subprojects/native-core`](subprojects/native-core/README.md) and is currently `0.12.0`. It terminates TLS/QUIC and strictly parses H1/H2/H3 in one gateway, with H1 WebSocket, H2/H3 gRPC, compressed bodies and trailers, bounded-body WAF/DLP, exact-IP bans, TLS mTLS/CRL, QUIC Retry, 0-RTT and migration disabled by default, and a QUIC client-network ACL. L4Wall can send standard PROXY v2 for TCP H1/H2; UDP H3 currently reaches the native QUIC listener directly. This TCP/UDP split must be understood explicitly during deployment.
 
-H1/H2/H3 are currently declared C3. C4 is not claimed: standardized JA3/JA4, real end-to-end WebSocket coverage, QPACK blocking, streaming backpressure saturation, and some slow-flow attacks remain uncovered. The standalone L5Wall `0.2.0` subproject remains C1 and provides TLS termination, session policy, and a bounded loopback H1 bridge. Safe Ops has no executor and keeps R2/R3 denied by default.
+H1/H2/H3 are currently declared C3. C4 is not claimed: standardized JA3/JA4, real end-to-end WebSocket coverage, QPACK blocking, streaming backpressure saturation, and some slow-flow attacks remain uncovered. The standalone L5Wall `0.2.1` release remains C1 and provides TLS termination, session policy, a bounded loopback H1 bridge, transient accept backoff, and bounded graceful draining. Safe Ops has no executor and keeps R2/R3 denied by default.
 
 `highwall capabilities --json` describes the **Python H1 baseline**; it is not the native-core capability manifest. C0/C1 are not complete protection, and forwarding an encrypted protocol is not protocol inspection. DSH completed its first independent acceptance pass with 0 Critical, 0 High, 3 Medium, 8 Low, and 3 informational findings, followed by r2/r3, r5, and r6 directed retests. In r5, seven of the eight scoped items closed (HWA-01/02/03/07/08/09/10). HWA-11 subsequently closed in the r6 narrow retest: HTTP 400 plus 270 termination, send-failure fallback, zero upstream hits, and no raw host-value leakage all passed. HWA-04/05/06 were not retested in the r5/r6 rounds. Independent attestation of the running process image is still missing, H3/UDP still bypasses L4Wall, and full production admission is not complete. See [docs/DSH-R6-RESULTS-20261101.md](docs/DSH-R6-RESULTS-20261101.md), [docs/DSH-R5-RESULTS-20261101.md](docs/DSH-R5-RESULTS-20261101.md), and [docs/DSH-REMEDIATION-20261101.md](docs/DSH-REMEDIATION-20261101.md) for evidence and boundaries, and [docs/DSH-SECURITY-ACCEPTANCE.md](docs/DSH-SECURITY-ACCEPTANCE.md) for the full acceptance scope. r5/r6 support manual release review but are not production admission, and DSH still recommends no push for production release. Public source and redacted test records have separate authorization for publication.
 
@@ -562,7 +562,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 **No attacker mark was created.** Only a `confirmed` actor is written to `offenders.json`; `suspected` traffic only receives a throttle or alert. Check `score_threshold`, `confirm_score`, and `confirm_after_seconds`, and verify that the service account can write `offender_path`. A mark is risk correlation, not authentication or a permanent ban.
 
-**Normal users are being throttled.** Fingerprints are correlated by `/24` or `/64` source prefix, so shared NAT, proxy pools, and monitoring probes can be affected. Start in `monitor` mode, then tune thresholds and slots; use route ACLs or source exceptions to separate normal traffic when necessary.
+**Normal users are being throttled.** Fingerprints are correlated by `/24` or `/64` source prefix, so shared NAT, proxy pools, and monitoring probes can be affected. Start in `monitor` mode, then tune thresholds and slots; use route ACLs or source exceptions to separate normal traffic when necessary. In a local loopback stress test, all clients normally appear as `127.0.0.1`; if auto-ban or `agent_mode=block` is enabled, stress traffic and normal requests share one ban bucket. Bind test clients to distinct loopback sources such as `127.0.0.2`, or disable that containment path before comparing normal requests.
 
 **Why does HighWall not mitigate DDoS automatically?** It performs L7 signal detection and alerting only. Bandwidth-based L3/L4 DDoS, SYN floods, and scrubbing belong at the CDN, carrier, or scrubbing provider. HighWall may become unreachable before it can alert, so an external heartbeat is mandatory.
 
@@ -629,7 +629,7 @@ The current suite covers strict parsing, path-parameter and trailing-dot bypasse
 
 The cross-layer loopback attack/defense acceptance suite lives in `tests/test_attack_defense.py`. It chains a real L4Wall, HighWall, and a stub upstream over TCP and covers L4 bans/rate limits/timeouts, shared-ban failure isolation, L7 Host/smuggling/traversal/WAF/DLP/CSRF/XFF, and the direct-to-HighWall/upstream bypass boundary. See [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md) for the full matrix, measured results, and unverified items.
 
-The native core has Rust unit, protocol, and live-listener tests. All 144 `cargo test --all-targets --locked` cases pass, covering real TCP/TLS/QUIC/H1/H2/H3 listeners, PROXY v2, Retry, unknown ALPN, 0-RTT, connection migration, WAF/DLP, gRPC/trailers, and resource budgets:
+The native core has Rust unit, protocol, and live-listener tests. All 148 `cargo test --all-targets --locked` cases pass, covering real TCP/TLS/QUIC/H1/H2/H3 listeners, PROXY v2, Retry, unknown ALPN, 0-RTT, connection migration, WAF/DLP, gRPC/trailers, resource budgets, and TCP reconnection churn:
 
 ```powershell
 cd subprojects/native-core
@@ -645,6 +645,8 @@ The real L4Wall-to-native chain test is skipped by default. After building the r
 $env:HIGHWALL_RUN_NATIVE_CHAIN='1'
 python -m unittest tests.test_native_chain -v
 ```
+
+Without a Rust toolchain, download and verify a `highwall-native-core-*` binary from a Release, point `HIGHWALL_NATIVE_CORE_BIN` at it, and run the same chain test. This validates the real L4Wall-to-native H1 process path, but does not replace the H2/H3/gRPC Rust source tests, which still require `cargo test` or CI. Rebuild the binary for branch changes; an older Release asset is not evidence for new code.
 
 GitHub Actions runs Ruff, mypy, coverage, and the full suite on Ubuntu/Windows with Python 3.10–3.14. CodeQL scans every pull request and weekly; Dependabot checks Actions, Python development dependencies, and the Docker base image weekly. All third-party Actions are pinned to commit SHAs, and release images carry an SBOM, provenance, a cosign signature, and a GitHub attestation.
 

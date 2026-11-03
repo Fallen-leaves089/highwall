@@ -14,6 +14,7 @@
   "max_connections": 128,
   "connect_timeout": 5.0,
   "idle_timeout": 30.0,
+  "shutdown_timeout": 8.0,
   "max_bytes_per_direction": 67108864,
   "max_request_head_bytes": 32768,
   "require_sni_host_match": true

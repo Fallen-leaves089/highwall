@@ -8,7 +8,9 @@ parser beyond the bounded checks needed for the transition boundary.
 
 from __future__ import annotations
 
+import errno
 import ipaddress
+import logging
 import re
 import socket
 import threading
@@ -25,6 +27,30 @@ _HOSTNAME_RE = re.compile(
 )
 _MAX_CHUNK = 64 * 1024
 _METHOD_RE = re.compile(rb"^[A-Z]+$")
+_ACCEPT_BACKOFF_INITIAL_SECONDS = 0.05
+_ACCEPT_BACKOFF_MAX_SECONDS = 1.0
+_LOGGER = logging.getLogger(__name__)
+_TRANSIENT_ACCEPT_ERRNOS = frozenset(
+    getattr(errno, name)
+    for name in (
+        "EINTR",
+        "EAGAIN",
+        "EWOULDBLOCK",
+        "ECONNABORTED",
+        "ECONNRESET",
+        "EMFILE",
+        "ENFILE",
+        "ENOBUFS",
+        "ENOMEM",
+        "WSAEINTR",
+        "WSAEWOULDBLOCK",
+        "WSAECONNABORTED",
+        "WSAECONNRESET",
+        "WSAEMFILE",
+        "WSAENOBUFS",
+    )
+    if hasattr(errno, name)
+)
 
 
 class L5ProxyError(OSError):
@@ -42,11 +68,17 @@ class L5ProxyServer:
         self._listener: socket.socket | None = None
         self._bound: tuple[str, int] | None = None
         self._stopped = threading.Event()
+        self._shutdown_lock = threading.Lock()
+        self._shutdown_started = False
         self._executor = ThreadPoolExecutor(
             max_workers=config.max_connections,
             thread_name_prefix="l5wall",
         )
         self._slots = threading.BoundedSemaphore(config.max_connections)
+        self._connection_condition = threading.Condition()
+        self._active_connections = 0
+        self._active_sockets: set[socket.socket] = set()
+        self._force_closing = False
 
     @property
     def address(self) -> tuple[str, int]:
@@ -78,30 +110,93 @@ class L5ProxyServer:
         self.bind()
         listener = self._listener
         assert listener is not None
+        backoff = _ACCEPT_BACKOFF_INITIAL_SECONDS
         while not self._stopped.is_set():
             try:
-                raw, peer = listener.accept()
+                raw, peer = self._accept(listener)
             except socket.timeout:
+                backoff = _ACCEPT_BACKOFF_INITIAL_SECONDS
                 continue
-            except OSError:
+            except OSError as exc:
+                if self._stopped.is_set():
+                    break
+                if not _is_transient_accept_error(exc):
+                    _LOGGER.error("fatal listener accept error: %s", exc)
+                    raise L5ProxyError(f"listener accept failed: {exc}") from exc
+                delay = backoff
+                backoff = min(_ACCEPT_BACKOFF_MAX_SECONDS, backoff * 2)
+                _LOGGER.warning(
+                    "transient listener accept error (%s); retrying in %.0f ms",
+                    exc,
+                    delay * 1000,
+                )
+                self._stopped.wait(delay)
+                continue
+            backoff = _ACCEPT_BACKOFF_INITIAL_SECONDS
+            if self._stopped.is_set():
+                _quiet_close(raw)
                 break
             if not self._slots.acquire(blocking=False):
                 _quiet_close(raw)
                 continue
+            self._begin_connection(raw)
             try:
                 self._executor.submit(self._run_connection, raw, peer)
-            except RuntimeError:
+            except RuntimeError as exc:
                 self._slots.release()
+                self._finish_connection((raw,))
                 _quiet_close(raw)
-                break
+                if self._stopped.is_set():
+                    break
+                raise L5ProxyError("connection executor is not accepting work") from exc
+
+    def _accept(self, listener: socket.socket) -> tuple[socket.socket, tuple[Any, ...]]:
+        return listener.accept()
+
+    def request_stop(self) -> None:
+        """Stop accepting new work; the serving thread performs the bounded drain."""
+        self._stopped.set()
 
     def stop(self) -> None:
-        self._stopped.set()
+        with self._shutdown_lock:
+            if self._shutdown_started:
+                return
+            self._shutdown_started = True
+
+        self.request_stop()
         listener = self._listener
         self._listener = None
         if listener is not None:
             _quiet_close(listener)
-        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._executor.shutdown(wait=False, cancel_futures=False)
+
+        deadline = time.monotonic() + self.config.shutdown_timeout
+        forced_sockets: list[socket.socket] = []
+        with self._connection_condition:
+            while self._active_connections:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._force_closing = True
+                    forced_sockets = list(self._active_sockets)
+                    break
+                self._connection_condition.wait(remaining)
+
+        if forced_sockets:
+            _LOGGER.warning(
+                "shutdown drain deadline reached with %d connection(s); closing them",
+                self._active_connections,
+            )
+            for active_socket in forced_sockets:
+                _quiet_close(active_socket)
+            with self._connection_condition:
+                forced_deadline = time.monotonic() + 1.0
+                while self._active_connections:
+                    remaining = forced_deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._connection_condition.wait(remaining)
+
+        self._executor.shutdown(wait=True, cancel_futures=True)
 
     def close(self) -> None:
         self.stop()
@@ -109,10 +204,13 @@ class L5ProxyServer:
     def _run_connection(self, raw: socket.socket, _peer: tuple[Any, ...]) -> None:
         client: socket.socket | None = None
         upstream: socket.socket | None = None
+        sockets: list[socket.socket] = [raw]
         try:
             raw.settimeout(self.config.handshake_timeout)
             connection = self.wall.wrap(raw)
             client = connection.socket
+            sockets.append(client)
+            self._track_socket(client)
             client.settimeout(self.config.idle_timeout)
             prefix = b""
             if self.config.require_sni_host_match:
@@ -122,6 +220,8 @@ class L5ProxyServer:
                 (self.config.upstream_host, self.config.upstream_port),
                 timeout=self.config.connect_timeout,
             )
+            sockets.append(upstream)
+            self._track_socket(upstream)
             upstream.settimeout(self.config.idle_timeout)
             if prefix:
                 upstream.sendall(prefix)
@@ -136,6 +236,37 @@ class L5ProxyServer:
             if upstream is not None:
                 _quiet_close(upstream)
             self._slots.release()
+            self._finish_connection(sockets)
+
+    def _begin_connection(self, raw: socket.socket) -> None:
+        with self._connection_condition:
+            self._active_connections += 1
+            self._active_sockets.add(raw)
+
+    def _track_socket(self, active_socket: socket.socket) -> None:
+        close_now = False
+        with self._connection_condition:
+            if self._force_closing:
+                close_now = True
+            else:
+                self._active_sockets.add(active_socket)
+        if close_now:
+            _quiet_close(active_socket)
+            raise L5ProxyError("server shutdown deadline reached")
+
+    def _finish_connection(self, sockets: list[socket.socket] | tuple[socket.socket, ...]) -> None:
+        with self._connection_condition:
+            for active_socket in sockets:
+                self._active_sockets.discard(active_socket)
+            self._active_connections -= 1
+            self._connection_condition.notify_all()
+
+
+def _is_transient_accept_error(error: OSError) -> bool:
+    if isinstance(error, (InterruptedError, BlockingIOError, ConnectionAbortedError, ConnectionResetError)):
+        return True
+    winerror = getattr(error, "winerror", None)
+    return error.errno in _TRANSIENT_ACCEPT_ERRNOS or winerror in _TRANSIENT_ACCEPT_ERRNOS
 
 
 def _read_request_head(sock: socket.socket, limit: int, timeout: float) -> bytes:

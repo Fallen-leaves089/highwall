@@ -125,7 +125,7 @@
   },
   "threat_detection": {
     "enabled": true,
-    "mode": "tarpit",
+    "mode": "monitor",
     "agent_mode": "score",
     "agent_min_signals": 3,
     "agent_score": 30,

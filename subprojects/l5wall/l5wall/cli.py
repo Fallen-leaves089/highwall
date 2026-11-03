@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
 from pathlib import Path
+from types import FrameType
 
 from . import __version__
 from .config import ConfigError, load_config
@@ -39,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if args.command == "serve":
         server = None
+        previous_sigterm = None
         try:
             server = L5ProxyServer(config)
             address = server.bind()
@@ -52,6 +55,16 @@ def main(argv: list[str] | None = None) -> int:
                 "do not enable per-IP bans or ACLs behind it without a trusted identity channel.",
                 flush=True,
             )
+
+            def request_stop(_signum: int, _frame: FrameType | None) -> None:
+                assert server is not None
+                server.request_stop()
+
+            try:
+                previous_sigterm = signal.getsignal(signal.SIGTERM)
+                signal.signal(signal.SIGTERM, request_stop)
+            except (OSError, ValueError):
+                previous_sigterm = None
             server.serve_forever()
         except KeyboardInterrupt:
             return 0
@@ -61,6 +74,11 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if server is not None:
                 server.stop()
+            if previous_sigterm is not None:
+                try:
+                    signal.signal(signal.SIGTERM, previous_sigterm)
+                except (OSError, ValueError):
+                    pass
         return 0
     if args.command == "inspect":
         payload = {

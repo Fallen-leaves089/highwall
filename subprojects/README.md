@@ -1,6 +1,6 @@
 # HighWall 子项目
 
-本目录存放与 HighWall 同仓库、但可以独立安装和测试的子系统。当前包含 L4Wall `0.1.0`、L5Wall `0.2.0` 和原生核心 `0.1.0-dev.0`。
+本目录存放与 HighWall 同仓库、但可以独立安装和测试的子系统。当前包含 L4Wall `0.1.0`、L5Wall `0.2.1` 和原生核心 `0.1.0-dev.0`。
 
 ## L4Wall
 
@@ -37,6 +37,6 @@ python -m l4wall check --config config.example.json
 
 ## L5Wall
 
-`l5wall/` 是独立的 TLS 会话层子项目，维护自己的版本、测试、威胁模型和检查工具。当前 `0.2.0` 覆盖等级为 `C1`：实现 TLS 1.2/1.3 终止、最低版本、SNI/ALPN 白名单、mTLS 模式、握手超时、最小化 L5 元数据和回环 H1 桥接；不负责 HTTP 路由、WAF 或 DLP。
+`l5wall/` 是独立的 TLS 会话层子项目，维护自己的版本、测试、威胁模型和检查工具。当前 `0.2.1` 覆盖等级为 `C1`：实现 TLS 1.2/1.3 终止、最低版本、SNI/ALPN 白名单、mTLS 模式、握手超时、最小化 L5 元数据、回环 H1 桥接、瞬时 accept 错误退避和有界优雅排空；不负责 HTTP 路由、WAF 或 DLP。
 
 它尚未被 Python HighWall 0.12.0 自动加载，也没有完整 JA3/JA4、0-RTT、QUIC、H2/H3 或握手前 TCP 预算，不能按完整 L5 防护宣传。部署上可用于 B+D-1 独立串联；B+D-4 原生核心内另有一套共享策略目标的 L5/L7 实现，并不声称直接链接或复用 l5wall 代码。两者继续独立演进，源码和接口边界保持分离。详见 [`l5wall/README.md`](l5wall/README.md) 和 [`../docs/GUARDRAIL-ARCHITECTURE.md`](../docs/GUARDRAIL-ARCHITECTURE.md)。
