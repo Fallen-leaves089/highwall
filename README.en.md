@@ -562,7 +562,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 **No attacker mark was created.** Only a `confirmed` actor is written to `offenders.json`; `suspected` traffic only receives a throttle or alert. Check `score_threshold`, `confirm_score`, and `confirm_after_seconds`, and verify that the service account can write `offender_path`. A mark is risk correlation, not authentication or a permanent ban.
 
-**Normal users are being throttled.** Fingerprints are correlated by `/24` or `/64` source prefix, so shared NAT, proxy pools, and monitoring probes can be affected. Start in `monitor` mode, then tune thresholds and slots; use route ACLs or source exceptions to separate normal traffic when necessary.
+**Normal users are being throttled.** Fingerprints are correlated by `/24` or `/64` source prefix, so shared NAT, proxy pools, and monitoring probes can be affected. Start in `monitor` mode, then tune thresholds and slots; use route ACLs or source exceptions to separate normal traffic when necessary. In a local loopback stress test, all clients normally appear as `127.0.0.1`; if auto-ban or `agent_mode=block` is enabled, stress traffic and normal requests share one ban bucket. Bind test clients to distinct loopback sources such as `127.0.0.2`, or disable that containment path before comparing normal requests.
 
 **Why does HighWall not mitigate DDoS automatically?** It performs L7 signal detection and alerting only. Bandwidth-based L3/L4 DDoS, SYN floods, and scrubbing belong at the CDN, carrier, or scrubbing provider. HighWall may become unreachable before it can alert, so an external heartbeat is mandatory.
 
