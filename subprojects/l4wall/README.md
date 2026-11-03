@@ -72,7 +72,7 @@ l4wall run --config config.json
 
 ## 发布与下载
 
-`0.1.0` 已作为独立 Release 发布：[L4Wall 0.1.0](https://github.com/Fallen-leaves089/highwall/releases/tag/l4wall-v0.1.0)。wheel、sdist 和只含 L4Wall 文件的 `SHA256SUMS` 只在该 Release 的 **Assets** 提供；不提供 GHCR 镜像、PyPI 包或其他下载渠道，也不附带 HighWall、L5Wall 或原生核心二进制。
+`0.1.0` 已作为独立 Release 发布：[L4Wall 0.1.0](https://github.com/Fallen-leaves089/highwall/releases/tag/l4wall-v0.1.0)。独立发布的 wheel、sdist 和只含 L4Wall 文件的 `SHA256SUMS` 以该 Release 的 **Assets** 为准；`v0.11.0` 页面只保留兼容旧链接的原始附件。不提供 GHCR 镜像、PyPI 包或其他下载渠道，也不附带 HighWall、L5Wall 或原生核心二进制。
 
 这个 `0.1.0` 包是 `v0.11.0` 官方历史资产的原样复用，不包含当前 `main` 后续加入的改动。完整说明见 [RELEASE-NOTES.md](docs/RELEASE-NOTES.md)。
 

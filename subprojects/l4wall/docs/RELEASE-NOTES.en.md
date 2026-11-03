@@ -25,7 +25,7 @@ SHA-256:
 5c5759e2a1f694b5296128622bbc3d31551097988cb1d85adaa1d8af46698dcf  l4wall-0.1.0.tar.gz
 ```
 
-The only distribution channel is the **Assets** section of this release. L4Wall has no GHCR image, PyPI package, or other download channel, and its packages do not contain HighWall, L5Wall, or native-core binaries.
+The canonical download location for this standalone release is the **Assets** section of this release. The historical `v0.11.0` page retains the original L4Wall attachments only for old links. L4Wall has no GHCR image, PyPI package, or other download channel, and its packages do not contain HighWall, L5Wall, or native-core binaries.
 
 ## Status
 
