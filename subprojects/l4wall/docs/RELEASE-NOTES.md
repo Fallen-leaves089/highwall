@@ -25,7 +25,7 @@ SHA-256：
 5c5759e2a1f694b5296128622bbc3d31551097988cb1d85adaa1d8af46698dcf  l4wall-0.1.0.tar.gz
 ```
 
-唯一分发入口是本 Release 的 **Assets**。L4Wall 不提供 GHCR 镜像、PyPI 包或其他额外下载渠道，也不把 HighWall、L5Wall 或原生核心二进制打进 L4Wall 包。
+独立发布的标准下载位置是本 Release 的 **Assets**；旧版 `v0.11.0` 页面仅保留原始 L4Wall 附件以兼容旧链接。L4Wall 不提供 GHCR 镜像、PyPI 包或其他额外下载渠道，也不把 HighWall、L5Wall 或原生核心二进制打进 L4Wall 包。
 
 ## 状态
 

@@ -16,7 +16,7 @@ permissions:
   id-token: write
 
 concurrency:
-  group: l4wall-release-${{ github.ref }}
+  group: l4wall-release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 env:
@@ -120,7 +120,11 @@ jobs:
             dist/*.tar.gz
 
       - name: Prepare release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
+          test "$(head -n 1 "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.md")" = "# L4Wall $VERSION"
+          test "$(head -n 1 "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.en.md")" = "# L4Wall $VERSION"
           cp "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.md" release-notes.md
           printf '\n\n---\n\n' >> release-notes.md
           cat "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.en.md" >> release-notes.md
