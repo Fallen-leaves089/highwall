@@ -19,13 +19,14 @@ from http import HTTPStatus
 from typing import Any, Iterable
 
 from .audit import AuditRecord
-from .config import Config, HoneypotRoute
+from .config import Config, HoneypotBackendConfig, HoneypotRoute, UpstreamConfig
 from .dlp import inspect_response
 from .errors import (
     BadGateway,
     GatewayTimeout,
     HighWallError,
     MethodNotAllowed,
+    NotFound,
     RequestTimeout,
     ServiceUnavailable,
     TooManyRequests,
@@ -45,6 +46,7 @@ from .waf import (
     normalize_ip,
     resolve_client_ip,
     validate_head,
+    validate_honeypot_head,
 )
 
 _LOG = logging.getLogger(__name__)
@@ -233,8 +235,20 @@ def _upstream_content_length(headers: tuple[tuple[str, str], ...]) -> int | None
 
 
 class UpstreamProxy:
-    def __init__(self, config: Config) -> None:
+    def __init__(
+        self,
+        config: Config,
+        *,
+        target: UpstreamConfig | HoneypotBackendConfig | None = None,
+        rule_prefix: str = "HW-UPSTREAM",
+    ) -> None:
         self.config = config
+        self.target = config.upstream if target is None else target
+        self.rule_prefix = rule_prefix
+        self.live_honeypot = target is not None
+
+    def _rule(self, code: str) -> str:
+        return f"{self.rule_prefix}-{code}"
 
     def _request_headers(
         self,
@@ -244,25 +258,44 @@ class UpstreamProxy:
         request_id: str,
         downstream_tls: bool,
     ) -> list[tuple[str, str]]:
+        if self.live_honeypot:
+            drop = set(_HOP_BY_HOP) | {"accept-encoding", "content-length", "host", "x-forwarded-for"}
+            drop.update(_connection_tokens(head.headers))
+            forwarded: list[tuple[str, str]] = []
+            for name, value in head.headers:
+                lower = name.lower()
+                if lower in drop or lower.startswith("proxy-"):
+                    continue
+                forwarded.append((name, value))
+            forwarded.append(("Host", self.target.host_header or inspection.host))
+            forwarded.append(("X-Forwarded-For", inspection.client_ip))
+            forwarded.append(("X-Forwarded-Host", inspection.host))
+            forwarded.append(("X-Forwarded-Proto", "https" if downstream_tls else "http"))
+            forwarded.append(("Accept-Encoding", "identity"))
+            if body or head.content_length > 0 or inspection.method in {"POST", "PUT", "PATCH"}:
+                forwarded.append(("Content-Length", str(len(body))))
+            forwarded.append(("Connection", "close"))
+            return forwarded
+
         drop = set(_REQUEST_STRIPPED)
         drop.update(_connection_tokens(head.headers))
-        forwarded: list[tuple[str, str]] = []
+        forwarded_headers: list[tuple[str, str]] = []
         for name, value in head.headers:
             lower = name.lower()
             if lower in drop or lower.startswith("proxy-"):
                 continue
-            forwarded.append((name, value))
-        host_header = self.config.upstream.host_header or inspection.host
-        forwarded.append(("Host", host_header))
-        forwarded.append(("X-Forwarded-For", inspection.client_ip))
-        forwarded.append(("X-Forwarded-Proto", "https" if downstream_tls else "http"))
-        forwarded.append(("X-Forwarded-Host", inspection.host))
-        forwarded.append(("X-Request-ID", request_id))
-        forwarded.append(("Accept-Encoding", "identity"))
+            forwarded_headers.append((name, value))
+        host_header = self.target.host_header or inspection.host
+        forwarded_headers.append(("Host", host_header))
+        forwarded_headers.append(("X-Forwarded-For", inspection.client_ip))
+        forwarded_headers.append(("X-Forwarded-Proto", "https" if downstream_tls else "http"))
+        forwarded_headers.append(("X-Forwarded-Host", inspection.host))
+        forwarded_headers.append(("X-Request-ID", request_id))
+        forwarded_headers.append(("Accept-Encoding", "identity"))
         if body or head.content_length > 0 or inspection.method in {"POST", "PUT", "PATCH"}:
-            forwarded.append(("Content-Length", str(len(body))))
-        forwarded.append(("Connection", "close"))
-        return forwarded
+            forwarded_headers.append(("Content-Length", str(len(body))))
+        forwarded_headers.append(("Connection", "close"))
+        return forwarded_headers
 
     def request(
         self,
@@ -272,11 +305,11 @@ class UpstreamProxy:
         request_id: str,
         downstream_tls: bool,
     ) -> UpstreamResponse:
-        config = self.config.upstream
-        connection_class = http.client.HTTPSConnection if config.scheme == "https" else http.client.HTTPConnection
-        deadline = time.monotonic() + config.total_timeout
-        connect_timeout = min(config.connect_timeout, config.total_timeout)
-        connection = connection_class(config.host, config.port, timeout=connect_timeout)
+        target = self.target
+        connection_class = http.client.HTTPSConnection if target.scheme == "https" else http.client.HTTPConnection
+        deadline = time.monotonic() + target.total_timeout
+        connect_timeout = min(target.connect_timeout, target.total_timeout)
+        connection = connection_class(target.host, target.port, timeout=connect_timeout)
         timed_out = threading.Event()
 
         def expire_connection() -> None:
@@ -293,16 +326,19 @@ class UpstreamProxy:
             connection.connect()
             if connection.sock is not None:
                 remaining = max(0.05, deadline - time.monotonic())
-                connection.sock.settimeout(min(config.read_timeout, remaining))
+                connection.sock.settimeout(min(target.read_timeout, remaining))
             connection.putrequest(head.method, inspection.upstream_target, skip_host=True, skip_accept_encoding=True)
             for name, value in self._request_headers(inspection, head, body, request_id, downstream_tls):
                 connection.putheader(name, value)
             connection.endheaders(body if body else None)
             response = connection.getresponse()
             if 100 <= response.status < 200:
-                raise BadGateway("interim upstream responses are not accepted", rule_id="HW-UPSTREAM-1007")
+                raise BadGateway(
+                    "interim upstream responses are not accepted",
+                    rule_id=self._rule("1007"),
+                )
             if response.status < 200 or response.status > 599:
-                raise BadGateway("invalid upstream status", rule_id="HW-UPSTREAM-1007")
+                raise BadGateway("invalid upstream status", rule_id=self._rule("1007"))
             headers = tuple(response.getheaders())
             content_encoding = [
                 value.strip().lower()
@@ -310,12 +346,21 @@ class UpstreamProxy:
                 if name.lower() == "content-encoding"
             ]
             if len(content_encoding) > 1 or (content_encoding and content_encoding[0] != "identity"):
-                raise BadGateway("encoded upstream responses are not accepted", rule_id="HW-UPSTREAM-1011")
+                raise BadGateway(
+                    "encoded upstream responses are not accepted",
+                    rule_id=self._rule("1011"),
+                )
             if len(headers) > 200:
-                raise BadGateway("upstream response has too many headers", rule_id="HW-UPSTREAM-1001")
+                raise BadGateway(
+                    "upstream response has too many headers",
+                    rule_id=self._rule("1001"),
+                )
             header_bytes = sum(len(name) + len(value) + 4 for name, value in headers)
             if header_bytes > 65536:
-                raise BadGateway("upstream response headers are too large", rule_id="HW-UPSTREAM-1002")
+                raise BadGateway(
+                    "upstream response headers are too large",
+                    rule_id=self._rule("1002"),
+                )
             upstream_content_length = _upstream_content_length(headers)
             transfer_encoding = [
                 value.strip().lower()
@@ -324,23 +369,38 @@ class UpstreamProxy:
             ]
             if transfer_encoding:
                 if len(transfer_encoding) != 1 or transfer_encoding[0] != "chunked":
-                    raise BadGateway("unsupported upstream Transfer-Encoding", rule_id="HW-UPSTREAM-1009")
+                    raise BadGateway(
+                        "unsupported upstream Transfer-Encoding",
+                        rule_id=self._rule("1009"),
+                    )
                 if upstream_content_length is not None:
-                    raise BadGateway("ambiguous upstream message framing", rule_id="HW-UPSTREAM-1008")
-            if upstream_content_length is not None and upstream_content_length > config.max_response_bytes and head.method != "HEAD":
-                raise BadGateway("upstream response exceeds configured limit", rule_id="HW-UPSTREAM-1003")
+                    raise BadGateway(
+                        "ambiguous upstream message framing",
+                        rule_id=self._rule("1008"),
+                    )
+            if upstream_content_length is not None and upstream_content_length > target.max_response_bytes and head.method != "HEAD":
+                raise BadGateway(
+                    "upstream response exceeds configured limit",
+                    rule_id=self._rule("1003"),
+                )
             if head.method == "HEAD" or response.status in {204, 304}:
                 body_bytes = b""
             else:
-                body_bytes = response.read(config.max_response_bytes + 1)
+                body_bytes = response.read(target.max_response_bytes + 1)
                 if timed_out.is_set() or time.monotonic() >= deadline:
-                    raise GatewayTimeout("upstream timed out", rule_id="HW-UPSTREAM-1004")
-                if len(body_bytes) > config.max_response_bytes:
-                    raise BadGateway("upstream response exceeds configured limit", rule_id="HW-UPSTREAM-1003")
+                    raise GatewayTimeout("upstream timed out", rule_id=self._rule("1004"))
+                if len(body_bytes) > target.max_response_bytes:
+                    raise BadGateway(
+                        "upstream response exceeds configured limit",
+                        rule_id=self._rule("1003"),
+                    )
                 if upstream_content_length is not None and len(body_bytes) != upstream_content_length:
-                    raise BadGateway("upstream Content-Length mismatch", rule_id="HW-UPSTREAM-1010")
+                    raise BadGateway(
+                        "upstream Content-Length mismatch",
+                        rule_id=self._rule("1010"),
+                    )
             if timed_out.is_set() or time.monotonic() >= deadline:
-                raise GatewayTimeout("upstream timed out", rule_id="HW-UPSTREAM-1004")
+                raise GatewayTimeout("upstream timed out", rule_id=self._rule("1004"))
             return UpstreamResponse(
                 status=response.status,
                 reason=response.reason or "",
@@ -349,11 +409,11 @@ class UpstreamProxy:
                 upstream_content_length=upstream_content_length,
             )
         except TimeoutError as exc:
-            raise GatewayTimeout("upstream timed out", rule_id="HW-UPSTREAM-1004") from exc
+            raise GatewayTimeout("upstream timed out", rule_id=self._rule("1004")) from exc
         except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
             if timed_out.is_set() or time.monotonic() >= deadline:
-                raise GatewayTimeout("upstream timed out", rule_id="HW-UPSTREAM-1004") from exc
-            raise BadGateway("upstream connection failed", rule_id="HW-UPSTREAM-1004") from exc
+                raise GatewayTimeout("upstream timed out", rule_id=self._rule("1004")) from exc
+            raise BadGateway("upstream connection failed", rule_id=self._rule("1004")) from exc
         finally:
             watchdog.cancel()
             connection.close()
@@ -407,6 +467,39 @@ def _clean_response_headers(
     if content_length is not None:
         headers.append(("Content-Length", str(content_length)))
     return headers, content_length
+
+
+def _honeypot_backend_headers(
+    response: UpstreamResponse,
+    method: str,
+    fallback_server: str,
+) -> tuple[list[tuple[str, str]], int | None, str]:
+    upstream_connection = _connection_tokens(response.headers)
+    drop = set(_HOP_BY_HOP) | upstream_connection | {"content-length", "date"}
+    headers: list[tuple[str, str]] = []
+    server_header = ""
+    for name, value in response.headers:
+        lower = name.lower()
+        if lower == "server":
+            if _valid_header_value(value):
+                server_header = value
+            continue
+        if lower in drop:
+            continue
+        if not _valid_header_name(name) or not _valid_header_value(value):
+            raise BadGateway("honeypot backend returned an unsafe header", rule_id="HW-HONEY-BACKEND-1005")
+        headers.append((name, value))
+    if response.status == 204:
+        content_length = None
+    elif method == "HEAD":
+        content_length = response.upstream_content_length if response.upstream_content_length is not None else 0
+    elif response.status == 304:
+        content_length = response.upstream_content_length
+    else:
+        content_length = len(response.body)
+    if content_length is not None:
+        headers.append(("Content-Length", str(content_length)))
+    return headers, content_length, server_header or fallback_server
 
 
 def _honeypot_headers(
@@ -609,6 +702,8 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         audit_needed = False
         forwarded = False
         honeypot_hit = False
+        honeypot_backend_attempted = False
+        honeypot_backend_error = False
         waf_detected = False
         dlp_detected = False
         integrity_detected = False
@@ -631,7 +726,16 @@ class ProxyHandler(socketserver.BaseRequestHandler):
         def finish_audit() -> None:
             nonlocal threat_alert
             duration_ms = int((time.monotonic() - started) * 1000)
-            if honeypot_hit:
+            if honeypot_backend_error:
+                event = "honeypot_backend_error"
+                outcome_text = "error"
+                metrics.inc("honeypot_hits_total")
+                metrics.inc("honeypot_backend_errors_total")
+            elif honeypot_backend_attempted:
+                event = "honeypot_backend_forwarded"
+                outcome_text = "forwarded"
+                metrics.inc("honeypot_hits_total")
+            elif honeypot_hit:
                 event = "honeypot_hit"
                 outcome_text = "decoy"
                 metrics.inc("honeypot_hits_total")
@@ -694,6 +798,7 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 and runtime.config.rate_limit.auto_ban_threshold > 0
                 and not banned_request
                 and not honeypot_hit
+                and not honeypot_backend_attempted
                 and not forwarded
                 and not threat_blocked
                 and client_ip not in {"", "unknown"}
@@ -725,7 +830,11 @@ class ProxyHandler(socketserver.BaseRequestHandler):
             if runtime.ddos_detector is not None:
                 if rule_id == "HW-RATE-1002":
                     runtime.ddos_detector.record_global_rejection()
-                if status in {502, 503, 504} and not forwarded:
+                if (
+                    status in {502, 503, 504}
+                    and not forwarded
+                    and not honeypot_backend_attempted
+                ):
                     runtime.ddos_detector.record_upstream_error()
                 ddos_result = runtime.ddos_detector.evaluate()
                 for alert in ddos_result.alerts:
@@ -833,7 +942,8 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 ddos_result = runtime.ddos_detector.evaluate()
                 for alert in ddos_result.alerts:
                     ddos_alerts.append(alert)
-            if runtime.threat_detector is not None:
+            live_honeypot = self.server.honeypot_backend is not None
+            if runtime.threat_detector is not None and not live_honeypot:
                 assessment = runtime.threat_detector.assess(
                     head,
                     client_ip,
@@ -910,7 +1020,13 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                     else:
                         metrics.inc("threat_delay_shed_total")
             phase = "validate"
-            inspection = validate_head(head, client_ip, policy)
+            if live_honeypot:
+                inspection = validate_honeypot_head(head, client_ip, policy)
+            else:
+                inspection = validate_head(head, client_ip, policy)
+                if self.server.honeypot_only and inspection.honeypot is None:
+                    rule_id = "HW-HONEY-1001"
+                    raise NotFound("path is not a configured decoy", rule_id=rule_id)
             if inspection.waf_hit:
                 rule_id = inspection.waf_hit
                 waf_detected = True
@@ -960,6 +1076,38 @@ class ProxyHandler(socketserver.BaseRequestHandler):
                 return
             body = read_request_body(reader, head)
             request_body_bytes = len(body)
+            if live_honeypot:
+                backend = self.server.honeypot_backend
+                assert backend is not None
+                phase = "honeypot_backend"
+                honeypot_backend_attempted = True
+                metrics.inc("honeypot_backend_requests_total")
+                try:
+                    response = upstream.request(
+                        head,
+                        inspection,
+                        body,
+                        request_id,
+                        self.server.tls_enabled,
+                    )
+                    backend_headers, content_length, server_header = _honeypot_backend_headers(
+                        response,
+                        head.method,
+                        backend.server_header,
+                    )
+                except (BadGateway, GatewayTimeout):
+                    honeypot_backend_error = True
+                    raise
+                status = response.status
+                response_bytes = self._send(
+                    status,
+                    backend_headers,
+                    response.body,
+                    method=head.method,
+                    content_length=content_length,
+                    server_header=server_header,
+                )
+                return
             phase = "waf_body"
             body_waf_hit = inspect_body(body, inspection.content_type, policy, charset=inspection.charset)
             if body_waf_hit:
@@ -1097,11 +1245,24 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         address: tuple[str, int],
         runtime: Runtime,
         tls_context: ssl.SSLContext | None = None,
+        *,
+        honeypot_only: bool = False,
+        honeypot_backend: HoneypotBackendConfig | None = None,
+        owns_runtime: bool = True,
     ) -> None:
+        if honeypot_backend is not None and not honeypot_only:
+            raise ValueError("a honeypot backend requires honeypot_only mode")
         self.runtime = runtime
         self.tls_context = tls_context
         self.tls_enabled = tls_context is not None
-        self.upstream = UpstreamProxy(runtime.config)
+        self.honeypot_only = honeypot_only
+        self.honeypot_backend = honeypot_backend
+        self._owns_runtime = owns_runtime
+        self.upstream = UpstreamProxy(
+            runtime.config,
+            target=honeypot_backend,
+            rule_prefix="HW-HONEY-BACKEND" if honeypot_backend is not None else "HW-UPSTREAM",
+        )
         self.generation = 0
         self._runtime_lock = threading.RLock()
         self._runtime_refs: dict[int, tuple[Runtime, int]] = {}
@@ -1122,7 +1283,8 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         self._pending_ip_keys: dict[int, tuple[socket.socket, str | None]] = {}
         self._tls_profiles: dict[tuple, TLSProfile | None] = {}
         self._tls_profile_lock = threading.Lock()
-        self._register_alert_dispatcher(runtime)
+        if self._owns_runtime:
+            self._register_alert_dispatcher(runtime)
         try:
             if ipaddress.ip_address(address[0]).version == 6:
                 self.address_family = socket.AF_INET6
@@ -1143,6 +1305,8 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             return runtime, self.upstream
 
     def _register_alert_dispatcher(self, runtime: Runtime) -> None:
+        if not self._owns_runtime:
+            return
         dispatcher = runtime.alert_dispatcher
         if dispatcher is None:
             return
@@ -1151,6 +1315,8 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
         self._alert_refs[id(dispatcher)] = (dispatcher, count + 1)
 
     def _release_alert_dispatcher(self, runtime: Runtime) -> None:
+        if not self._owns_runtime:
+            return
         dispatcher = runtime.alert_dispatcher
         if dispatcher is None:
             return
@@ -1177,6 +1343,8 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
             _, count = current
             if count <= 1:
                 self._runtime_refs.pop(id(runtime), None)
+                if not self._owns_runtime:
+                    return
                 retired = self._retired_runtimes.pop(id(runtime), None)
                 if retired is not None:
                     close_runtime = True
@@ -1188,17 +1356,21 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
 
     def reload(self, runtime: Runtime, tls_context: ssl.SSLContext | None) -> int:
         close_runtime: Runtime | None = None
-        new_upstream = UpstreamProxy(runtime.config)
+        new_upstream = UpstreamProxy(
+            runtime.config,
+            target=self.honeypot_backend,
+            rule_prefix="HW-HONEY-BACKEND" if self.honeypot_backend is not None else "HW-UPSTREAM",
+        )
         with self._runtime_lock:
             old = self.runtime
-            if old is not runtime:
+            if self._owns_runtime and old is not runtime:
                 self._register_alert_dispatcher(runtime)
             self.runtime = runtime
             self.upstream = new_upstream
             self.tls_context = tls_context
             self.tls_enabled = tls_context is not None
             self.generation += 1
-            if old is not runtime:
+            if self._owns_runtime and old is not runtime:
                 refs = self._runtime_refs.get(id(old))
                 if refs is None:
                     close_runtime = old
@@ -1243,6 +1415,8 @@ class GatewayServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
                 pass
 
     def close_all_runtimes(self) -> None:
+        if not self._owns_runtime:
+            return
         with self._runtime_lock:
             current = self.runtime
             retired = list(self._retired_runtimes.values())

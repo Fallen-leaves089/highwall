@@ -104,7 +104,7 @@ See [Quick start](#quick-start) for all options.
 - Best-effort multi-signal fingerprints from HTTP header shape, the TLS ClientHello when HighWall terminates TLS, and a `/24` or `/64` source prefix. Sensitive header values are reduced to redacted placeholders and never become part of the fingerprint.
 - Two-stage containment: `suspected` traffic is first throttled for a 5-minute window; `confirmed` attackers are written to a bounded persistent mark store and slowed for 15 minutes. Tarpit slots are globally and per-actor bounded.
 - Aggregates L7 request rate, rejection ratio, connection saturation, TLS handshake failures, and upstream error ratio into `ddos_suspected` / `ddos_escalated` alerts, with a 5-minute response window, recovery events, and asynchronous webhook delivery.
-- Configurable exact-path honeypots: built-in templates for common scanning paths return local static decoys and never contact the upstream. A hit creates a dedicated audit event and can immediately ban the source or add a bounded short delay.
+- Configurable exact-path honeypots: 34 built-in scanning-path templates return local static decoys by default. You can add independent honeypot ports and route requests that miss a static path to an isolated HTTP high-interaction backend. A hit creates a dedicated audit event and can immediately ban the source or add a bounded short delay.
 - Global or route-level `read_only`: write methods are rejected before reaching the upstream, which is useful for static sites, backup browsing, and separating administrative reads from writes.
 - Optional response-integrity pinning for exact `GET` paths: validates the status code and response-body SHA-256. `detect` records a hit; `block` returns 502 without forwarding the replaced content.
 - Optional upstream circuit breaker: after repeated connection failures, timeouts, or 5xx responses, requests are rejected briefly; after cooldown, bounded half-open probes verify recovery to prevent failure amplification.
@@ -256,7 +256,7 @@ $env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
 
 ## Custom honeypots
 
-A honeypot is an explicitly configured **exact-path decoy**. A request is matched against a normalized path only after it passes the client ACL and Host allowlist. On a hit, HighWall serves static content directly and never connects to the upstream. To avoid scanners receiving an early 403 from ordinary WAF or method rules, honeypot paths do not inherit the normal `allowed_methods`, Content-Type, Origin, read-only, or WAF constraints.
+A honeypot is an explicitly configured **exact-path decoy**. A request is matched against a normalized path only after it passes the client ACL and Host allowlist. By default, HighWall serves static content directly and never connects to the upstream. To avoid scanners receiving an early 403 from ordinary WAF or method rules, honeypot paths do not inherit the normal `allowed_methods`, Content-Type, Origin, read-only, or WAF constraints.
 
 ```json
 {
@@ -266,10 +266,18 @@ A honeypot is an explicitly configured **exact-path decoy**. A request is matche
 }
 ```
 
+Use `listeners` to separate honeypots from the main application port. A listener
+with `backend` still serves static decoys first; only unmatched requests go to
+its dedicated HTTP backend. A failure returns 502/504 and never falls back to the
+business upstream. The backend must be a loopback, RFC1918, or IPv6 ULA IP
+literal and must not be the business upstream, proxy, admin endpoint, itself, or
+another honeypot listener. See [`deploy/honeypot/README.md`](deploy/honeypot/README.md)
+for the isolated deployment and the real cost of full emulation.
+
 Security constraints:
 
 - Matching is exact after path normalization. Prefix and wildcard matching are not supported, and the query string does not participate.
-- `presets` can enable built-in groups directly: `common`, `secrets`, `wordpress`, `spring`, `admin`, `devops`, and `cloud`. Individual template names are also accepted. Explicit `routes` override presets by path.
+- `presets` can enable built-in groups directly: `common`, `secrets`, `wordpress`, `spring`, `admin`, `devops`, `cloud`, `build`, `infra`, `observability`, or `expanded`/`all`. Individual template names are also accepted. Explicit `routes` override presets by path.
 - Response bodies must be embedded in the configuration and must not exceed 64 KiB. Only safe custom response headers are allowed; managed headers such as `Content-Type`, `Content-Length`, `Set-Cookie`, and `Server` are restricted.
 - The URL, headers, and request body are never reflected. Request bodies, headers, cookies, Authorization, and query strings are not logged. Audit events contain only the method, path, source, status, and rule ID.
 - When `ban_seconds` is greater than 0, the first hit bans the source immediately. Ban state is stored only in memory. Shared NAT egress may cause collateral bans; set it to `0` to disable.
@@ -291,7 +299,7 @@ HighWall is an L7 gateway, not an “absolute” defense:
 - It **cannot replace a host firewall or network segmentation**. Client CIDR ACLs only process HTTP requests that reach HighWall; they do not cover DNS tunnels, RPC, raw sockets, or other non-HTTP traffic.
 - `read_only` blocks only `POST`, `PUT`, `PATCH`, and `DELETE` by HTTP method. It cannot detect a bad business design that causes side effects through `GET`.
 - Integrity pinning covers only exact static `GET` paths and status codes in the configuration. Query strings are not part of the match and adding one does not bypass the check. It does not cover HEAD, dynamic pages, response headers, WebSocket, or streaming responses.
-- Honeypots cover only explicitly configured exact paths and cannot discover every scan. They may be fingerprinted, accidental bans can affect shared NAT sources, and they provide no high-interaction shell, file drop, or counterattack capability.
+- Default honeypots cover only explicitly configured exact paths and cannot discover every scan. They may be fingerprinted and accidental bans can affect shared NAT sources. An optional high-interaction backend is a separately deployed, capturable asset, not a complete business replica, and provides no counterattack capability; the gateway itself does not execute untrusted content.
 - The circuit breaker intentionally returns 503 while an upstream is failing repeatedly. It is failure isolation, not DDoS scrubbing or a capacity guarantee.
 - The **Python baseline does not proxy** WebSocket, HTTP/2, or bidirectional streaming responses; an Upgrade request is rejected. Responses are buffered up to `max_response_bytes`. H1 WebSocket and H2/H3 are handled only by the native core when explicitly configured.
 - WAF signatures are heuristic. They cannot guarantee coverage of every variant and may produce false positives. For an unknown application, start with `detect` before switching to `block`.
@@ -496,7 +504,7 @@ No native GHCR image is published in this snapshot, and the image was not built 
 - `policy.allowed_origins`: optional canonical Origin allowlist, for example `https://app.example.com`. Once configured, `POST`, `PUT`, `PATCH`, and `DELETE` must carry an allowed Origin, and cross-site writes are rejected. When empty, the original non-browser-compatible behavior is preserved. Browser cross-origin writes send an `OPTIONS` preflight first, so add `OPTIONS` to `allowed_methods` when enabling this allowlist and make sure the upstream answers the preflight.
 - `policy.read_only`: global read-only switch; `routes[].read_only` applies only to the matching longest prefix. It cannot detect GET side effects.
 - `policy.routes`: selected by longest path prefix. Supports `methods`, `read_only`, `max_body_bytes`, `max_concurrent`, `rate`, `rate_burst`, and `allowed_client_networks`. Route methods must be a subset of global `allowed_methods`; an empty route source list is rejected rather than silently allowed. `rate` is tokens per client per second; when `rate_burst` is omitted it defaults to the rate rounded up.
-- `policy.honeypot`: disabled by default. Once enabled, exact normalized paths serve decoys, using built-in `presets` or custom `routes` with a static status, Content-Type, body, restricted response headers, server identity, first-hit ban, and a 0-5000 ms delay. Hits never touch the upstream and bypass ordinary method/Content-Type/WAF/read-only restrictions to preserve the trap. Host and client ACL checks still take precedence.
+- `policy.honeypot`: disabled by default. Once enabled, exact normalized paths serve decoys, using 34 built-in templates, custom `routes`, or independent `listeners` with optional isolated high-interaction `backend` objects. Static hits never touch the upstream; backend failures return 502/504 without falling back to the business upstream. Honeypot paths bypass ordinary method/Content-Type/WAF/read-only restrictions to preserve the trap, while Host, client ACLs, and resource limits still take precedence.
 - `policy.response_integrity_mode` / `integrity_pins`: validate the status and response-body SHA-256 for normalized `GET` routes, case-insensitively. Supports `off`, `detect`, and `block`. Pin values must be updated through a controlled release process.
 - `upstream.circuit_breaker`: `failure_threshold`, `window`, `open_seconds`, and `half_open_max_requests` control upstream failure isolation. Only timeouts, connection/protocol failures, and 5xx responses count as failures; 4xx means the upstream was reachable.
 - `server.max_inflight_requests`: global in-flight request limit; `0` disables it. It should be lower than `max_connections` to create independent backpressure.

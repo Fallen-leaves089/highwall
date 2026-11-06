@@ -48,7 +48,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return asyncio.run(_run(args.config, args.log_level))
         if args.command == "check":
             config = load_config(args.config)
-            print(f"ok: {len(config.listeners)} listener(s), version {config.version}")
+            print(
+                f"ok: {len(config.listeners)} listener(s), "
+                f"{len(config.honeypots)} honeypot(s), version {config.version}"
+            )
             return 0
         if args.command == "inspect":
             config = load_config(args.config)
@@ -114,6 +117,17 @@ async def _run(config_path: str, log_level: str) -> int:
             print(
                 f"listener {listener.name}: {config.server.listen_host}:{port} -> "
                 f"{listener.upstream_host}:{listener.upstream_port}"
+            )
+        for honeypot in config.honeypots:
+            port = gateway.honeypot_ports.get(honeypot.name, honeypot.listen_port)
+            target = (
+                f"-> {honeypot.backend_host}:{honeypot.backend_port}"
+                if honeypot.backend_host is not None
+                else "(static decoys)"
+            )
+            print(
+                f"honeypot {honeypot.name}: {honeypot.listen_host}:{port} "
+                f"template={honeypot.template} {target}"
             )
         if admin is not None:
             await admin.start()

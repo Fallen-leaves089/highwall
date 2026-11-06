@@ -105,7 +105,7 @@ python -m highwall serve -c config.json
 - 可对 HTTP/TLS 形状做多信号指纹；执法封禁键绑定精确客户端地址与稳定形状，`/24`、`/64` 只用于关联分析，不直接扩大封禁范围。疑似阶段先限速，确认后写入有界持久标记，并对慢速通道施加 5 分钟疑似窗口或 15 分钟确认窗口。
 - 可聚合 L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误，触发 DDoS 告警并异步推送 Webhook；支持恢复事件和 5 分钟响应窗口。
 - 可按最长路径前缀配置路由策略：方法子集、只读、路由级来源 CIDR、请求体上限、独立并发槽位和每客户端令牌桶限速。
-- 可配置精确路径蜜罐：内置常见扫描路径模板，返回本地静态诱饵，绝不访问上游；命中后记录独立审计事件，并可立即封禁来源或施加有上限的短延迟。
+- 可配置精确路径蜜罐：内置 34 个扫描路径模板，默认返回本地静态诱饵；可增加多个独立蜜罐端口，并把未命中静态路径的流量接到隔离 HTTP 高交互后端。命中记录独立审计，并可立即封禁来源或施加有上限的短延迟。
 - 支持全局或路由级 `read_only`：写方法在到达上游前被拒绝，适合静态站、备份浏览和管理读写分离。
 - 可对精确 `GET` 路径做响应完整性钉扎：校验状态码和响应体 SHA-256；`detect` 记录，`block` 返回 502 且不转发被替换的内容。
 - 可启用上游熔断：连续连接失败、超时或 5xx 后短暂拒绝请求，冷却后用有界半开探针验证恢复，避免故障放大。
@@ -258,7 +258,7 @@ $env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
 
 ## 自定义蜜罐
 
-蜜罐是显式配置的**精确路径诱饵**。请求只有在通过来源 ACL 和 Host 白名单后，才会按规范化路径匹配；命中后由 HighWall 直接返回静态内容，不连接上游。为避免扫描器因普通 WAF/方法规则提前收到 403，蜜罐路径不套用普通 `allowed_methods`、Content-Type、Origin、只读和 WAF 约束。
+蜜罐是显式配置的**精确路径诱饵**。请求只有在通过来源 ACL 和 Host 白名单后，才会按规范化路径匹配；默认命中由 HighWall 直接返回静态内容，不连接上游。为避免扫描器因普通 WAF/方法规则提前收到 403，蜜罐路径不套用普通 `allowed_methods`、Content-Type、Origin、只读和 WAF 约束。
 
 ```json
 {
@@ -268,10 +268,16 @@ $env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
 }
 ```
 
+需要把蜜罐移出主业务端口时，可用 `listeners` 增加独立端口。某个端口配置
+`backend` 后，静态诱饵仍优先；未命中静态路径才转发到专用 HTTP 后端，失败时
+只返回 502/504，绝不回落业务上游。高交互后端必须位于回环/私网，且不能是
+业务上游、主代理、管理面、自身或其他蜜罐端口。隔离部署和完整仿真成本见
+[`deploy/honeypot/README.md`](deploy/honeypot/README.md)。
+
 安全约束：
 
 - 只按规范化后的完整路径精确匹配，不做前缀或通配符匹配；查询串不参与匹配。
-- `presets` 可直接启用内置组：`common`、`secrets`、`wordpress`、`spring`、`admin`、`devops`、`cloud`，也可列出单个模板名；显式 `routes` 会按路径覆盖预设。
+- `presets` 可直接启用内置组：`common`、`secrets`、`wordpress`、`spring`、`admin`、`devops`、`cloud`、`build`、`infra`、`observability` 或 `expanded`/`all`，也可列出单个模板名；显式 `routes` 会按路径覆盖预设。
 - 响应体必须写在配置内且不超过 64 KiB；只允许安全自定义响应头，限制 `Content-Type`、`Content-Length`、`Set-Cookie`、`Server` 等托管头。
 - 不反射 URL、Header 或请求体，不记录请求体、Header、Cookie、Authorization 或查询串；审计只记录方法、路径、来源、状态和规则 ID。
 - `ban_seconds` 大于 0 时，第一次命中即封禁该来源；封禁状态只保存在内存中。共享 NAT 出口可能被连带封禁，可通过设为 `0` 关闭。
@@ -293,7 +299,7 @@ HighWall 是 L7 网关，不是“绝对高防”：
 - **不能替代主机防火墙或网络分段**：客户端 CIDR ACL 只处理已经到达 HighWall 的 HTTP 请求，不处理 DNS 隧道、RPC、原始套接字或其他非 HTTP 流量。
 - `read_only` 只按 HTTP 方法阻断 `POST`/`PUT`/`PATCH`/`DELETE`，无法识别通过 `GET` 触发副作用的错误业务设计。
 - 完整性钉扎只覆盖配置中精确匹配的静态 `GET` 路径和状态码；查询串不参与匹配，也不会因为加了 query 就绕过校验。它不覆盖 HEAD、动态页面、响应头、WebSocket 或流式响应。
-- 蜜罐只覆盖显式配置的精确路径，不能发现所有扫描；它可能被指纹识别，误触封禁会影响共享 NAT 来源，也不提供高交互 shell、文件落盘或反制能力。
+- 默认蜜罐只覆盖显式配置的精确路径，不能发现所有扫描；它可能被指纹识别，误触封禁会影响共享 NAT 来源。可选高交互后端是独立部署的可被攻陷资产，不是完整业务仿真，也不提供反制能力；网关本身不执行不可信内容。
 - 熔断器会在上游连续故障时主动返回 503；它是故障隔离，不是 DDoS 清洗或容量保证。
 - 持久标记可能因共享 NAT、代理池或刻意模仿正常浏览器而产生误报；默认先 `monitor`，并保护 `offenders.json` 不被未授权修改或删除。
 - **不代理** WebSocket、HTTP/2、双向流式响应；检测到 Upgrade 会拒绝。响应会缓冲到 `max_response_bytes`。
@@ -496,7 +502,7 @@ docker run --rm highwall-native-core:dev --version
 - `policy.allowed_origins`：可选的规范 Origin 白名单，例如 `https://app.example.com`。配置后，`POST`/`PUT`/`PATCH`/`DELETE` 必须带允许的 Origin，跨站写请求会被拒绝；为空时保持原来的非浏览器兼容行为。浏览器跨域写请求会先发 `OPTIONS` 预检，启用该白名单时要把 `OPTIONS` 加入 `allowed_methods`，并确认上游能响应预检。
 - `policy.read_only`：全局只读开关；`routes[].read_only` 只对命中的最长路径前缀生效。它不识别 GET 副作用。
 - `policy.routes`：按最长路径前缀选择；可设置 `methods`、`read_only`、`max_body_bytes`、`max_concurrent`、`rate`、`rate_burst` 和 `allowed_client_networks`。路由方法必须是全局 `allowed_methods` 的子集，空路由来源列表会被拒绝而不是静默放行；`rate` 是每客户端每秒令牌数，`rate_burst` 省略时取速率向上取整。
-- `policy.honeypot`：默认关闭；启用后按规范化后的精确路径拦截诱饵，支持内置 `presets` 或自定义 `routes`、静态状态码、Content-Type、Body、受限响应头、服务端标识、首击封禁和 0–5000 ms 拖延。命中不访问上游，并绕过普通方法/Content-Type/WAF/只读限制以保留诱捕效果；Host 和客户端 ACL 仍然优先。
+- `policy.honeypot`：默认关闭；启用后按规范化后的精确路径拦截诱饵，支持 34 个内置模板、自定义 `routes`、独立 `listeners`、静态状态码、Content-Type、Body、受限响应头、服务端标识、首击封禁和 0–5000 ms 拖延。静态命中不访问上游；独立端口可选 `backend` 转发到隔离高交互服务，失败不回落业务上游。蜜罐绕过普通方法/Content-Type/WAF/只读限制，但 Host、客户端 ACL 和资源上限仍然优先。
 - `policy.response_integrity_mode` / `integrity_pins`：对规范化后的 `GET` 路由路径（大小写不敏感）校验 `status` 和响应体 SHA-256；支持 `off`、`detect`、`block`。钉扎值必须随受控发布流程更新。
 - `upstream.circuit_breaker`：`failure_threshold`、`window`、`open_seconds` 和 `half_open_max_requests` 控制上游故障隔离；只把超时、连接/协议失败和 5xx 计为失败，4xx 视为上游可达。
 - `server.max_inflight_requests`：全局在途请求上限，`0` 表示关闭；应小于 `max_connections` 才能形成独立背压。

@@ -42,8 +42,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\quickstart.ps1
 - 手工局部修改使用 `python -m highwall init --base config.json --output config.json --force --listen-port 18091`；`--base` 模式只修改显式字段，并在写盘前验证合并结果。若配置包含相对审计或 TLS 路径，输出到另一个目录会被拒绝，避免相对路径悄悄指向新位置。
 - `highwall inspect` 输出的是解析、默认值和蜜罐预设展开后的生效值，不是原始文件回显，包含 TLS、超时、路由、WAF、响应扫描、安全头、限流和管理面参数。用它核对“写了但没生效”的情况。
 - 配置晋级前运行 `highwall diff -c config.json --candidate config.next.json`：`0` 表示无生效变化，`1` 表示只需热加载，`3` 表示必须重启，`4` 表示检测到安全降级。候选配置会先经过完整校验；`security_review` 中的上游、管理面或审计路径变化仍需人工确认。
-- `--force` 是原子替换配置文件；Windows ACL 可能随新文件继承父目录权限。生产环境替换后应重新核对服务账户 ACL；可热改字段通过 `/reload` 生效，监听地址/端口、`max_connections`、`max_inflight_requests` 或 TLS 启用状态变更仍需重启。
-- HighWall 支持原子配置重载：POSIX 发送 `SIGHUP`，或调用管理面 `POST /reload`。重载失败会保留旧配置；监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态和管理面监听仍需重启。`quickstart.ps1 -Status` 仍会比较启动时记录的 SHA-256 与当前文件，并在发现变化时提示重启，这是实验脚本的保守行为，不代表进程不能热加载。
+- `--force` 是原子替换配置文件；Windows ACL 可能随新文件继承父目录权限。生产环境替换后应重新核对服务账户 ACL；可热改字段通过 `/reload` 生效，监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态或 `policy.honeypot.listeners` 变更仍需重启。
+- HighWall 支持原子配置重载：POSIX 发送 `SIGHUP`，或调用管理面 `POST /reload`。重载失败会保留旧配置；监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态、管理面监听和额外蜜罐端口仍需重启。`quickstart.ps1 -Status` 仍会比较启动时记录的 SHA-256 与当前文件，并在发现变化时提示重启，这是实验脚本的保守行为，不代表进程不能热加载。
 
 ### 配置重载与证书轮换
 
@@ -56,7 +56,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 - 先在同一个服务环境里确认新配置能通过 `check`，并用 `diff` 确认没有必须重启或阻断晋级的安全降级，再调用 `/reload`；返回 `{"status":"reloaded","generation":N}` 表示已切换。
 - 失败返回 `{"status":"rejected","error":"..."}`，旧配置继续服务；检查日志和 `config_reload_failures_total`。
 - 证书轮换可替换文件内容或路径后重载；新握手使用新证书，旧连接保持旧上下文直到结束。轮换后用新连接验证证书链和主机名。
-- 需要修改监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态或管理面监听时，使用滚动重启。
+- 需要修改监听地址/端口、`max_connections`、`max_inflight_requests`、TLS 启用状态、管理面监听或 `policy.honeypot.listeners` 时，使用滚动重启。
 - `server.shutdown_timeout` 控制 `SIGINT`/`SIGTERM`/`SIGBREAK` 后的排空等待；排空期间新连接返回 503（TLS 连接直接关闭），超时后剩余连接被关闭。
 
 ## 1. 目录与账户
@@ -154,7 +154,7 @@ python -m highwall check -c 'C:\ProgramData\HighWall\config.json' --strict
 python -m highwall inspect -c 'C:\ProgramData\HighWall\config.json'
 ```
 
-重点确认 `server.listen_*`、`upstream.*`、`policy.allowed_*`、`policy.routes`、`policy.honeypot.routes`、`rate_limit`、`audit.path` 和 `admin` 与预期一致。`inspect` 不连接上游、不创建监听器，也不输出管理 token 或蜜罐响应体。
+重点确认 `server.listen_*`、`upstream.*`、`policy.allowed_*`、`policy.routes`、`policy.honeypot.routes`、`policy.honeypot.listeners`、`rate_limit`、`audit.path` 和 `admin` 与预期一致。`inspect` 不连接上游、不创建监听器，也不输出管理 token 或蜜罐响应体。
 
 注意：这些是 **L7 判据**。客户端 ACL、Origin 校验和 DLP 都不能替代主机防火墙、DNS 策略、netns 或上游认证；DLP 只读取有界文本前缀，且不再接受压缩上游响应，以免扫描被绕过。
 
@@ -192,13 +192,29 @@ Remove-Item -LiteralPath .\app.js.bin
 
 ### 自定义蜜罐
 
-在 `policy.honeypot` 中可用 `presets` 一行启用内置模板，也可用 `routes` 覆盖或新增诱饵。命中后 HighWall 直接返回本地静态响应，不连接上游；Host 和客户端 CIDR ACL 仍然优先。
+在 `policy.honeypot` 中可用 `presets` 一行启用内置模板，也可用 `routes` 覆盖或新增诱饵。默认命中由 HighWall 直接返回本地静态响应，不连接上游；Host 和客户端 CIDR ACL 仍然优先。需要把蜜罐从主业务端口分开时，可用 `listeners` 声明额外的 honeypot-only 端口。某个独立端口还可以配置 `backend`，把未命中静态路径的流量转发到隔离的 HTTP 高交互后端。
 
 ```json
 {
   "enabled": true,
   "ban_seconds": 0,
-  "presets": ["common"]
+  "presets": ["common"],
+  "listeners": [
+    {"name": "decoy-admin", "listen_host": "127.0.0.1", "listen_port": 18092},
+    {
+      "name": "live-admin",
+      "listen_host": "127.0.0.1",
+      "listen_port": 18093,
+      "backend": {
+        "scheme": "http",
+        "host": "127.0.0.1",
+        "port": 18080,
+        "host_header": "admin.staging.invalid",
+        "server_header": "nginx",
+        "max_response_bytes": 4194304
+      }
+    }
+  ]
 }
 ```
 
@@ -207,8 +223,13 @@ Remove-Item -LiteralPath .\app.js.bin
 - 诱饵路径必须精确且真实不存在，不要覆盖正常路由；蜜罐优先于普通路径允许/拒绝、方法、Content-Type、Origin、只读和 WAF 判断。
 - `common` 包含多个栈的扫描路径，启用前逐项核对真实业务路由；需要更窄范围时选择 `secrets`、`wordpress`、`spring`、`admin`、`devops` 或单个模板名。
 - 先设 `ban_seconds=0` 上线观察 `honeypot_hits_total` 和审计事件，确认没有正常用户误触，再启用首击封禁。
+- `listeners` 最多 32 个；名称和端口必须唯一，且不得与主代理端口、管理端口或其他蜜罐端口冲突。没有 `backend` 的额外端口未命中精确诱饵路径时直接返回 404；有 `backend` 时只转发到该专用后端。
+- `listeners` 和 `listeners[].backend` 是启动字段；增加、删除或修改端口、后端地址或超时需要重启。额外端口继承主服务 TLS 配置，并共享同一套蜜罐封禁和审计。
 - Body 最大 64 KiB；禁止设置网关托管的响应头；响应不反射输入，也不记录请求体、Header、Cookie、Authorization 或查询串。
-- 蜜罐不是高交互沙箱、DDoS 防护或取证执行环境。详细边界见 [`HONEYPOT.md`](HONEYPOT.md)，模板清单和参考来源见 [`HONEYPOT-TEMPLATES.md`](HONEYPOT-TEMPLATES.md)。
+- 配置 `backend` 时，只允许回环、RFC1918 或 IPv6 ULA 的 IP 字面量，且不得指向业务 upstream、主代理、管理面、自身或其他蜜罐端口；失败只返回 502/504，不回落业务上游。静态路由仍然优先。
+- 高交互后端不是完整业务仿真，也不由 HighWall 执行。真实 SSH/HTTP 诱饵必须放在只读、无出网、无宿主挂载、无 Docker socket、资源受限且可重建的隔离环境；参考 [`deploy/honeypot`](../deploy/honeypot/README.md)。
+- 高交互端口不应直接暴露公网；网关负责入口控制，后端应用漏洞、容器逃逸、横向移动、取证和隐私合规仍由独立部署负责。
+- 默认静态蜜罐和可选高交互后端都不是 DDoS 防护。详细边界见 [`HONEYPOT.md`](HONEYPOT.md)，模板清单和参考来源见 [`HONEYPOT-TEMPLATES.md`](HONEYPOT-TEMPLATES.md)。
 
 ## 3. 管理 token
 

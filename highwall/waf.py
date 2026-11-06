@@ -302,7 +302,11 @@ def _scan_head(head: RequestHead, path: str, query: str, policy: PolicyConfig) -
     return hit.rule_id if hit is not None else None
 
 
-def validate_head(head: RequestHead, client_ip: str, policy: PolicyConfig) -> HeadInspection:
+def _validate_request_envelope(
+    head: RequestHead,
+    client_ip: str,
+    policy: PolicyConfig,
+) -> tuple[str, str, str, str, str, HoneypotRoute | None]:
     _check_client_network(client_ip, policy)
     host_value = single_header(head.headers, "host")
     if host_value is None or not host_value:
@@ -316,6 +320,42 @@ def validate_head(head: RequestHead, client_ip: str, policy: PolicyConfig) -> He
 
     path, query, route_path, upstream_target = _normalize_target(head.target, policy)
     honeypot = _honeypot_for_path(route_path, policy)
+    return host, path, query, route_path, upstream_target, honeypot
+
+
+def validate_honeypot_head(
+    head: RequestHead,
+    client_ip: str,
+    policy: PolicyConfig,
+) -> HeadInspection:
+    """Apply only the admission and target checks needed by a live decoy port."""
+
+    host, path, query, route_path, upstream_target, honeypot = _validate_request_envelope(
+        head,
+        client_ip,
+        policy,
+    )
+    return HeadInspection(
+        method=head.method,
+        target=head.target,
+        path=path,
+        route_path=route_path,
+        query=query,
+        host=host,
+        client_ip=client_ip,
+        content_type=None,
+        waf_hit=None,
+        honeypot=honeypot,
+        upstream_target=upstream_target,
+    )
+
+
+def validate_head(head: RequestHead, client_ip: str, policy: PolicyConfig) -> HeadInspection:
+    host, path, query, route_path, upstream_target, honeypot = _validate_request_envelope(
+        head,
+        client_ip,
+        policy,
+    )
     if honeypot is not None:
         return HeadInspection(
             method=head.method,
