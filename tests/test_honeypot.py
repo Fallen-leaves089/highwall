@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
-from highwall.config import ConfigError
+from highwall.config import ConfigError, HoneypotBackendConfig
+from highwall.config_report import build_config_report
 from highwall.errors import Forbidden
 from highwall.protocol import RequestHead
+from highwall.proxy import GatewayServer
 from highwall.waf import validate_head
 from tests.support import (
     GatewayHarness,
@@ -15,6 +18,7 @@ from tests.support import (
     audit_text,
     base_config,
     build_request,
+    free_port,
     header_values,
     parse_response,
     send_raw,
@@ -81,6 +85,187 @@ class HoneypotConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ConfigError, "must not be empty"):
             self.config({"enabled": True, "routes": []})
 
+    def test_additional_honeypot_listeners_are_parsed(self) -> None:
+        config = self.config(
+            {
+                "enabled": True,
+                "presets": ["common"],
+                "listeners": [
+                    {"name": "decoy-admin", "listen_port": 18092},
+                    {"name": "decoy-api", "listen_host": "127.0.0.1", "listen_port": 18093},
+                ],
+            }
+        )
+        self.assertEqual(
+            [(item.name, item.listen_host, item.listen_port) for item in config.policy.honeypot.listeners],
+            [
+                ("decoy-admin", "127.0.0.1", 18092),
+                ("decoy-api", "127.0.0.1", 18093),
+            ],
+        )
+        report = build_config_report(config)
+        self.assertEqual(report["policy"]["honeypot"]["listeners"][0]["name"], "decoy-admin")
+
+    def test_high_interaction_backend_is_parsed_and_reported(self) -> None:
+        config = self.config(
+            {
+                "enabled": True,
+                "presets": ["common"],
+                "listeners": [
+                    {
+                        "name": "live-admin",
+                        "listen_port": 18092,
+                        "backend": {
+                            "host": "10.20.30.40",
+                            "port": 8080,
+                            "host_header": "admin.internal",
+                            "server_header": "Apache",
+                            "connect_timeout": 1.5,
+                            "read_timeout": 5,
+                            "total_timeout": 12,
+                            "max_response_bytes": 1048576,
+                        },
+                    }
+                ],
+            }
+        )
+        backend = config.policy.honeypot.listeners[0].backend
+        assert backend is not None
+        self.assertEqual(backend.scheme, "http")
+        self.assertEqual((backend.host, backend.port), ("10.20.30.40", 8080))
+        self.assertEqual(backend.host_header, "admin.internal")
+        self.assertEqual(backend.server_header, "Apache")
+        report = build_config_report(config)
+        rendered = report["policy"]["honeypot"]["listeners"][0]["backend"]
+        self.assertEqual(rendered["host"], "10.20.30.40")
+        self.assertEqual(rendered["port"], 8080)
+
+    def test_high_interaction_backend_requires_isolated_address(self) -> None:
+        for host in ("8.8.8.8", "169.254.169.254", "0.0.0.0", "backend.internal"):
+            with self.subTest(host=host):
+                with self.assertRaisesRegex(ConfigError, "IP literal"):
+                    self.config(
+                        {
+                            "enabled": True,
+                            "presets": ["common"],
+                            "listeners": [
+                                {
+                                    "name": "live-admin",
+                                    "listen_port": 18092,
+                                    "backend": {"host": host, "port": 8080},
+                                }
+                            ],
+                        }
+                    )
+
+        with self.assertRaisesRegex(ConfigError, "scheme must be http"):
+            self.config(
+                {
+                    "enabled": True,
+                    "presets": ["common"],
+                    "listeners": [
+                        {
+                            "name": "live-admin",
+                            "listen_port": 18092,
+                            "backend": {"scheme": "https", "host": "10.0.0.5", "port": 443},
+                        }
+                    ],
+                }
+            )
+
+    def test_high_interaction_backend_rejects_business_and_self_targets(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "business upstream"):
+            self.config(
+                {
+                    "enabled": True,
+                    "presets": ["common"],
+                    "listeners": [
+                        {
+                            "name": "live-admin",
+                            "listen_port": 18092,
+                            "backend": {"host": "127.0.0.1", "port": 18080},
+                        }
+                    ],
+                }
+            )
+
+        with self.assertRaisesRegex(ConfigError, "own listener"):
+            self.config(
+                {
+                    "enabled": True,
+                    "presets": ["common"],
+                    "listeners": [
+                        {
+                            "name": "live-admin",
+                            "listen_port": 18092,
+                            "backend": {"host": "127.0.0.1", "port": 18092},
+                        }
+                    ],
+                }
+            )
+
+    def test_high_interaction_backend_rejects_local_gateway_targets(self) -> None:
+        cases = [
+            (18090, "proxy listener"),
+            (18091, "admin listener"),
+            (18093, "another honeypot listener"),
+        ]
+        for port, message in cases:
+            with self.subTest(port=port):
+                with self.assertRaisesRegex(ConfigError, message):
+                    self.config(
+                        {
+                            "enabled": True,
+                            "presets": ["common"],
+                            "listeners": [
+                                {
+                                    "name": "live-admin",
+                                    "listen_port": 18092,
+                                    "backend": {"host": "127.0.0.1", "port": port},
+                                },
+                                {
+                                    "name": "static-admin",
+                                    "listen_port": 18093,
+                                },
+                            ],
+                        }
+                    )
+
+    def test_honeypot_listener_host_must_be_an_ip_literal(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "must be an IP address"):
+            self.config(
+                {
+                    "enabled": True,
+                    "presets": ["common"],
+                    "listeners": [{"name": "hostname", "listen_host": "localhost", "listen_port": 18092}],
+                }
+            )
+
+    def test_additional_honeypot_listeners_reject_conflicts(self) -> None:
+        cases = [
+            {"listeners": [{"name": "bad", "listen_port": 18090}]},
+            {"listeners": [{"name": "bad", "listen_port": 18091}]},
+            {
+                "listeners": [
+                    {"name": "one", "listen_port": 18092},
+                    {"name": "two", "listen_port": 18092},
+                ]
+            },
+            {
+                "listeners": [
+                    {"name": "same", "listen_port": 18092},
+                    {"name": "same", "listen_port": 18093},
+                ]
+            },
+        ]
+        for case in cases:
+            with self.subTest(case=case):
+                with self.assertRaises(ConfigError):
+                    self.config({"enabled": True, "presets": ["common"], **case})
+
+        with self.assertRaisesRegex(ConfigError, "enabled"):
+            self.config({"enabled": False, "listeners": [{"name": "decoy", "listen_port": 18092}]})
+
     def test_builtin_presets_expand_without_route_definitions(self) -> None:
         config = self.config({"enabled": True, "presets": ["common"]})
         paths = [route.path for route in config.policy.honeypot.routes]
@@ -99,6 +284,21 @@ class HoneypotConfigTests(unittest.TestCase):
         config = self.config({"enabled": True, "presets": ["env_probe", "secrets"]})
         paths = [route.path for route in config.policy.honeypot.routes]
         self.assertEqual(paths, ["/.env", "/.git/HEAD", "/.git/config", "/.svn/entries"])
+
+    def test_expanded_template_preset_includes_build_and_infra_decoys(self) -> None:
+        config = self.config({"enabled": True, "presets": ["all"]})
+        paths = [route.path for route in config.policy.honeypot.routes]
+        self.assertGreaterEqual(len(paths), 34)
+        self.assertEqual(len(paths), len(set(paths)))
+        for path in (
+            "/package.json",
+            "/docker-compose.yml",
+            "/terraform.tfstate",
+            "/actuator/health",
+            "/metrics",
+            "/.npmrc",
+        ):
+            self.assertIn(path, paths)
 
     def test_explicit_route_overrides_preset_path(self) -> None:
         custom = decoy_routes()[0]
@@ -210,6 +410,161 @@ class HoneypotIntegrationTests(unittest.TestCase):
     def request(self, payload: bytes) -> tuple[int, list[tuple[str, str]], bytes]:
         assert self.gateway is not None
         return parse_response(send_raw(self.gateway.port, payload))
+
+    def start_honeypot_port(
+        self,
+        port: int = 0,
+        backend: HoneypotBackendConfig | None = None,
+    ) -> int:
+        assert self.gateway is not None
+        server = GatewayServer(
+            ("127.0.0.1", port),
+            self.gateway.runtime,
+            honeypot_only=True,
+            honeypot_backend=backend,
+            owns_runtime=False,
+        )
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        thread.start()
+
+        def cleanup() -> None:
+            server.begin_drain()
+            server.shutdown()
+            server.server_close()
+            server.wait_for_drain(1.0)
+            thread.join(timeout=2.0)
+
+        self.addCleanup(cleanup)
+        return int(server.server_address[1])
+
+    def backend_config(
+        self,
+        port: int,
+        *,
+        host_header: str | None = "admin.internal",
+        max_response_bytes: int = 1048576,
+    ) -> HoneypotBackendConfig:
+        return HoneypotBackendConfig(
+            scheme="http",
+            host="127.0.0.1",
+            port=port,
+            host_header=host_header,
+            server_header="nginx",
+            connect_timeout=0.5,
+            read_timeout=1.0,
+            total_timeout=3.0,
+            max_response_bytes=max_response_bytes,
+        )
+
+    def test_honeypot_only_port_serves_decoys_but_never_forwards(self) -> None:
+        gateway = self.start(ban_seconds=0)
+        port = self.start_honeypot_port()
+        status, headers, body = parse_response(send_raw(port, build_request(path="/.env")))
+        self.assertEqual(status, 200)
+        self.assertIn(b"DB_HOST=db.internal", body)
+        self.assertEqual(header_values(headers, "X-Decoy"), ["environment"])
+
+        status, _, body = parse_response(send_raw(port, build_request(path="/ok")))
+        self.assertEqual(status, 404)
+        self.assertNotIn(b"hello from upstream", body)
+        self.assertEqual(self.stub.state.snapshot(), [])
+        text = audit_text(Path(self.temp.name))
+        self.assertIn('"event":"honeypot_hit"', text)
+        self.assertEqual(gateway.runtime.metrics.snapshot()["honeypot_hits_total"], 1)
+
+    def test_multiple_honeypot_ports_share_honeypot_ban_state(self) -> None:
+        gateway = self.start(ban_seconds=30)
+        first = self.start_honeypot_port()
+        second = self.start_honeypot_port()
+
+        status, _, _ = parse_response(send_raw(first, build_request(path="/.env")))
+        self.assertEqual(status, 200)
+        status, _, body = parse_response(send_raw(second, build_request(path="/.env")))
+        self.assertEqual(status, 429)
+        self.assertNotIn(b"DB_HOST=db.internal", body)
+        self.assertEqual(self.stub.state.snapshot(), [])
+        metrics = gateway.runtime.metrics.snapshot()
+        self.assertEqual(metrics["honeypot_bans_total"], 1)
+        self.assertEqual(metrics["honeypot_ban_rejections_total"], 1)
+
+    def test_high_interaction_listener_uses_only_its_isolated_backend(self) -> None:
+        gateway = self.start(ban_seconds=0)
+        backend_stub = StubUpstream()
+        backend_stub.__enter__()
+        self.addCleanup(backend_stub.__exit__, None, None, None)
+        port = self.start_honeypot_port(
+            backend=self.backend_config(backend_stub.port),
+        )
+
+        payload = build_request(
+            method="POST",
+            path="/admin/login?next=/dashboard",
+            headers=[
+                ("Content-Type", "text/plain"),
+                ("Authorization", "Basic YWRtaW46YWRtaW4="),
+                ("Cookie", "session=scanner"),
+            ],
+            body=b"username=admin&note=<script>alert(1)</script>",
+        )
+        status, headers, body = parse_response(send_raw(port, payload))
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"hello from upstream")
+        self.assertEqual(header_values(headers, "Server"), ["upstream-secret"])
+        self.assertEqual(header_values(headers, "X-Powered-By"), ["php/leaky"])
+        self.assertEqual(header_values(headers, "X-Custom"), ["keep-me"])
+        self.assertEqual(len(header_values(headers, "Set-Cookie")), 2)
+        self.assertEqual(header_values(headers, "Content-Security-Policy"), ["default-src *"])
+        self.assertEqual(self.stub.state.snapshot(), [])
+
+        requests = backend_stub.state.snapshot()
+        self.assertEqual(len(requests), 1)
+        request = requests[0]
+        self.assertEqual(request["method"], "POST")
+        self.assertEqual(request["path"], "/admin/login?next=/dashboard")
+        self.assertEqual(request["body"], b"username=admin&note=<script>alert(1)</script>")
+        forwarded = {name.lower(): value for name, value in request["headers"]}
+        self.assertEqual(forwarded["host"], "admin.internal")
+        self.assertEqual(forwarded["authorization"], "Basic YWRtaW46YWRtaW4=")
+        self.assertEqual(forwarded["cookie"], "session=scanner")
+        self.assertEqual(forwarded["x-forwarded-for"], "127.0.0.1")
+        self.assertEqual(forwarded["accept-encoding"], "identity")
+
+        metrics = gateway.runtime.metrics.snapshot()
+        self.assertEqual(metrics["honeypot_hits_total"], 1)
+        self.assertEqual(metrics["honeypot_backend_requests_total"], 1)
+        event = json.loads(audit_text(Path(self.temp.name)).splitlines()[-1])
+        self.assertEqual(event["event"], "honeypot_backend_forwarded")
+        self.assertEqual(event["outcome"], "forwarded")
+
+    def test_high_interaction_static_decoy_wins_without_touching_backend(self) -> None:
+        self.start(ban_seconds=0)
+        backend_stub = StubUpstream()
+        backend_stub.__enter__()
+        self.addCleanup(backend_stub.__exit__, None, None, None)
+        port = self.start_honeypot_port(
+            backend=self.backend_config(backend_stub.port),
+        )
+
+        status, headers, body = parse_response(send_raw(port, build_request(path="/.env")))
+        self.assertEqual(status, 200)
+        self.assertIn(b"DB_HOST=db.internal", body)
+        self.assertEqual(header_values(headers, "X-Decoy"), ["environment"])
+        self.assertEqual(backend_stub.state.snapshot(), [])
+        self.assertEqual(self.stub.state.snapshot(), [])
+
+    def test_high_interaction_backend_failure_never_falls_back_to_business(self) -> None:
+        gateway = self.start(ban_seconds=0)
+        port = self.start_honeypot_port(backend=self.backend_config(free_port()))
+        status, _, body = parse_response(send_raw(port, build_request(path="/dashboard")))
+        self.assertIn(status, {502, 504})
+        self.assertNotIn(b"hello from upstream", body)
+        self.assertEqual(self.stub.state.snapshot(), [])
+        metrics = gateway.runtime.metrics.snapshot()
+        self.assertEqual(metrics["honeypot_backend_requests_total"], 1)
+        self.assertEqual(metrics["honeypot_backend_errors_total"], 1)
+        event = json.loads(audit_text(Path(self.temp.name)).splitlines()[-1])
+        self.assertEqual(event["event"], "honeypot_backend_error")
+        self.assertEqual(event["outcome"], "error")
 
     def test_exact_denied_path_serves_static_decoy_without_upstream(self) -> None:
         gateway = self.start()

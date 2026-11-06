@@ -330,6 +330,235 @@ HONEYPOT_TEMPLATES: dict[str, dict[str, Any]] = {
         ),
         "server_header": "nginx",
     },
+    "npmrc": {
+        "id": "npmrc",
+        "path": "/.npmrc",
+        "content_type": "text/plain; charset=utf-8",
+        "body": (
+            "registry=https://registry.npmjs.org/\n"
+            "//registry.npmjs.org/:_authToken=decoy-not-a-real-token\n"
+            "fund=false\n"
+            "audit=true\n"
+        ),
+        "server_header": "nginx",
+    },
+    "docker_compose": {
+        "id": "docker_compose",
+        "path": "/docker-compose.yml",
+        "content_type": "application/yaml; charset=utf-8",
+        "body": (
+            "version: \"3.9\"\n"
+            "services:\n"
+            "  web:\n"
+            "    image: nginx:1.27-alpine\n"
+            "    environment:\n"
+            "      APP_ENV: production\n"
+            "      DB_HOST: db.internal.invalid\n"
+            "      DB_PASSWORD: decoy-not-a-real-password\n"
+            "    ports:\n"
+            "      - \"8080:80\"\n"
+            "  cache:\n"
+            "    image: redis:7-alpine\n"
+        ),
+        "server_header": "nginx",
+    },
+    "dockerfile": {
+        "id": "dockerfile",
+        "path": "/Dockerfile",
+        "content_type": "text/plain; charset=utf-8",
+        "body": (
+            "FROM python:3.12-slim\n"
+            "WORKDIR /app\n"
+            "COPY requirements.txt .\n"
+            "RUN pip install --no-cache-dir -r requirements.txt\n"
+            "COPY . .\n"
+            "EXPOSE 8000\n"
+            "CMD [\"python\", \"-m\", \"app\"]\n"
+        ),
+        "server_header": "nginx",
+    },
+    "package_json": {
+        "id": "package_json",
+        "path": "/package.json",
+        "content_type": "application/json; charset=utf-8",
+        "body": _json_body(
+            {
+                "name": "internal-console",
+                "version": "2.8.1",
+                "private": True,
+                "scripts": {"start": "node server.js", "test": "jest --runInBand"},
+                "dependencies": {"express": "^4.19.2", "pg": "^8.12.0"},
+                "devDependencies": {"jest": "^29.7.0"},
+            }
+        ),
+        "server_header": "nginx",
+    },
+    "composer_json": {
+        "id": "composer_json",
+        "path": "/composer.json",
+        "content_type": "application/json; charset=utf-8",
+        "body": _json_body(
+            {
+                "name": "example/internal-app",
+                "description": "Synthetic decoy manifest",
+                "require": {"php": "^8.2", "laravel/framework": "^11.0"},
+                "autoload": {"psr-4": {"App\\": "app/"}},
+            }
+        ),
+        "server_header": "nginx",
+    },
+    "gitlab_ci": {
+        "id": "gitlab_ci",
+        "path": "/.gitlab-ci.yml",
+        "content_type": "application/yaml; charset=utf-8",
+        "body": (
+            "stages:\n"
+            "  - test\n"
+            "  - deploy\n"
+            "test:\n"
+            "  stage: test\n"
+            "  image: python:3.12\n"
+            "  script:\n"
+            "    - pip install -r requirements.txt\n"
+            "    - pytest -q\n"
+            "deploy:\n"
+            "  stage: deploy\n"
+            "  script: ./scripts/deploy.sh\n"
+        ),
+        "server_header": "nginx",
+    },
+    "terraform_state": {
+        "id": "terraform_state",
+        "path": "/terraform.tfstate",
+        "content_type": "application/json; charset=utf-8",
+        "body": _json_body(
+            {
+                "version": 4,
+                "terraform_version": "1.8.5",
+                "serial": 17,
+                "lineage": "decoy-lineage",
+                "resources": [
+                    {
+                        "mode": "managed",
+                        "type": "aws_instance",
+                        "name": "app",
+                        "provider": "provider[\"registry.terraform.io/hashicorp/aws\"]",
+                        "instances": [
+                            {
+                                "attributes": {
+                                    "ami": "ami-decoy",
+                                    "instance_type": "t3.micro",
+                                    "private_ip": "10.0.0.12",
+                                }
+                            }
+                        ],
+                    }
+                ],
+            }
+        ),
+        "server_header": "nginx",
+    },
+    "htpasswd": {
+        "id": "htpasswd",
+        "path": "/.htpasswd",
+        "content_type": "text/plain; charset=utf-8",
+        "body": "admin:{SHA}ZGVjb3ktbm90LWEtcmVhbC1oYXNo\noperator:{SHA}ZGVjb3ktbm90LWEtcmVhbC1oYXNo\n",
+        "server_header": "nginx",
+    },
+    "phpinfo": {
+        "id": "phpinfo",
+        "path": "/phpinfo.php",
+        "content_type": "text/html; charset=utf-8",
+        "body": (
+            "<!doctype html><html><head><title>phpinfo()</title></head><body>\n"
+            "<h1>PHP Version 8.2.20</h1>\n"
+            "<table><tr><td>System</td><td>Linux app 6.5.0 x86_64</td></tr>\n"
+            "<tr><td>Server API</td><td>FPM/FastCGI</td></tr>\n"
+            "<tr><td>Document Root</td><td>/var/www/html</td></tr>\n"
+            "<tr><td>Configuration File</td><td>/etc/php/8.2/fpm/php.ini</td></tr></table>\n"
+            "</body></html>\n"
+        ),
+        "server_header": "nginx",
+    },
+    "actuator_health": {
+        "id": "actuator_health",
+        "path": "/actuator/health",
+        "content_type": "application/json; charset=utf-8",
+        "body": _json_body(
+            {
+                "status": "UP",
+                "components": {
+                    "db": {"status": "UP", "details": {"database": "PostgreSQL"}},
+                    "diskSpace": {"status": "UP", "details": {"free": 10737418240}},
+                    "redis": {"status": "UP", "details": {"version": "7.2.4"}},
+                },
+            }
+        ),
+        "server_header": "nginx",
+    },
+    "actuator_mappings": {
+        "id": "actuator_mappings",
+        "path": "/actuator/mappings",
+        "content_type": "application/json; charset=utf-8",
+        "body": _json_body(
+            {
+                "contexts": {
+                    "application": {
+                        "mappings": {
+                            "dispatcherServlets": {
+                                "dispatcherServlet": [
+                                    {"predicate": "{GET /api/v1/items}", "details": {"handler": "ItemsController"}},
+                                    {"predicate": "{POST /api/v1/orders}", "details": {"handler": "OrderController"}},
+                                ]
+                            }
+                        }
+                    }
+                }
+            }
+        ),
+        "server_header": "nginx",
+    },
+    "prometheus_metrics": {
+        "id": "prometheus_metrics",
+        "path": "/metrics",
+        "content_type": "text/plain; version=0.0.4; charset=utf-8",
+        "body": (
+            "# HELP http_requests_total Total HTTP requests.\n"
+            "# TYPE http_requests_total counter\n"
+            "http_requests_total{method=\"GET\",status=\"200\"} 18471\n"
+            "http_requests_total{method=\"POST\",status=\"500\"} 23\n"
+            "# HELP process_resident_memory_bytes Resident memory size.\n"
+            "# TYPE process_resident_memory_bytes gauge\n"
+            "process_resident_memory_bytes 1.847e+08\n"
+            "process_start_time_seconds 1772323200\n"
+        ),
+        "server_header": "nginx",
+    },
+    "vscode_settings": {
+        "id": "vscode_settings",
+        "path": "/.vscode/settings.json",
+        "content_type": "application/json; charset=utf-8",
+        "body": _json_body(
+            {
+                "editor.tabSize": 4,
+                "python.defaultInterpreterPath": "/usr/bin/python3",
+                "terminal.integrated.env.linux": {"APP_ENV": "production"},
+            }
+        ),
+        "server_header": "nginx",
+    },
+    "backup_sql": {
+        "id": "backup_sql",
+        "path": "/backup.sql",
+        "content_type": "text/plain; charset=utf-8",
+        "body": (
+            "-- Synthetic decoy dump; no real data\n"
+            "CREATE TABLE users (id integer primary key, email text, role text);\n"
+            "INSERT INTO users VALUES (1, 'admin@example.invalid', 'admin');\n"
+            "INSERT INTO users VALUES (2, 'operator@example.invalid', 'operator');\n"
+        ),
+        "server_header": "nginx",
+    },
 }
 
 
@@ -340,6 +569,9 @@ HONEYPOT_PRESET_GROUPS: dict[str, tuple[str, ...]] = {
     "admin": ("admin_php", "phpmyadmin_root", "phpmyadmin_index", "tomcat_manager"),
     "devops": ("server_status", "swagger_ui", "openapi_json", "elasticsearch_health"),
     "cloud": ("aws_credentials", "kube_config"),
+    "build": ("npmrc", "docker_compose", "dockerfile", "package_json", "composer_json", "gitlab_ci"),
+    "infra": ("terraform_state", "htpasswd", "vscode_settings", "backup_sql"),
+    "observability": ("phpinfo", "actuator_health", "actuator_mappings", "prometheus_metrics"),
     "common": (
         "env_probe",
         "git_config",
@@ -361,6 +593,15 @@ HONEYPOT_PRESET_GROUPS: dict[str, tuple[str, ...]] = {
         "elasticsearch_health",
     ),
 }
+
+HONEYPOT_PRESET_GROUPS["expanded"] = (
+    *HONEYPOT_PRESET_GROUPS["common"],
+    *HONEYPOT_PRESET_GROUPS["cloud"],
+    *HONEYPOT_PRESET_GROUPS["build"],
+    *HONEYPOT_PRESET_GROUPS["infra"],
+    *HONEYPOT_PRESET_GROUPS["observability"],
+)
+HONEYPOT_PRESET_GROUPS["all"] = HONEYPOT_PRESET_GROUPS["expanded"]
 
 
 def expand_honeypot_presets(names: Iterable[str]) -> tuple[str, ...]:

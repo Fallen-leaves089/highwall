@@ -12,6 +12,7 @@ IMMUTABLE_RELOAD_FIELDS: tuple[str, ...] = (
     "server.max_connections",
     "server.max_inflight_requests",
     "server.tls.enabled",
+    "policy.honeypot.listeners",
     "admin.enabled",
     "admin.listen_host",
     "admin.listen_port",

@@ -154,14 +154,36 @@ class HoneypotRoute:
 
 
 @dataclass(frozen=True)
+class HoneypotListenerConfig:
+    name: str
+    listen_host: str
+    listen_port: int
+    backend: "HoneypotBackendConfig | None" = None
+
+
+@dataclass(frozen=True)
+class HoneypotBackendConfig:
+    scheme: str
+    host: str
+    port: int
+    host_header: str | None
+    server_header: str
+    connect_timeout: float
+    read_timeout: float
+    total_timeout: float
+    max_response_bytes: int
+
+
+@dataclass(frozen=True)
 class HoneypotConfig:
     enabled: bool
     ban_seconds: float
     routes: tuple[HoneypotRoute, ...]
+    listeners: tuple[HoneypotListenerConfig, ...] = ()
 
 
 def _default_honeypot() -> HoneypotConfig:
-    return HoneypotConfig(enabled=False, ban_seconds=0.0, routes=())
+    return HoneypotConfig(enabled=False, ban_seconds=0.0, routes=(), listeners=())
 
 
 @dataclass(frozen=True)
@@ -921,13 +943,196 @@ def _parse_honeypot_route(item: Any, item_where: str) -> HoneypotRoute:
     )
 
 
-def _parse_honeypot(value: Any) -> HoneypotConfig:
+_ISOLATED_BACKEND_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "::1/128",
+        "fc00::/7",
+    )
+)
+
+
+def _parse_isolated_backend_host(value: Any, where: str) -> str:
+    text = _string(value, where, None, 1, 255).strip()
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{where} must be an IP literal in loopback, RFC1918, or IPv6 ULA space"
+        ) from exc
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    if not any(address in network for network in _ISOLATED_BACKEND_NETWORKS):
+        raise ConfigError(
+            f"{where} must be an IP literal in loopback, RFC1918, or IPv6 ULA space"
+        )
+    return str(address)
+
+
+def _normalized_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
+def _same_endpoint(host_a: str, port_a: int, host_b: str, port_b: int) -> bool:
+    """Compare listener endpoints without treating wildcard and loopback as different."""
+
+    if port_a != port_b:
+        return False
+    address_a = _normalized_ip(host_a)
+    address_b = _normalized_ip(host_b)
+    if address_a is None or address_b is None:
+        return host_a.strip().rstrip(".").lower() == host_b.strip().rstrip(".").lower()
+    if address_a.version != address_b.version:
+        return False
+    if address_a.is_unspecified or address_b.is_unspecified:
+        return address_a.is_loopback or address_b.is_loopback or address_a == address_b
+    return address_a == address_b
+
+
+def _parse_honeypot_backend(value: Any, where: str) -> HoneypotBackendConfig:
+    raw = _object(
+        value,
+        where,
+        {
+            "scheme",
+            "host",
+            "port",
+            "host_header",
+            "server_header",
+            "connect_timeout",
+            "read_timeout",
+            "total_timeout",
+            "max_response_bytes",
+        },
+    )
+    scheme = _string(raw.get("scheme"), f"{where}.scheme", "http", 4, 5).lower()
+    if scheme != "http":
+        raise ConfigError(
+            f"{where}.scheme must be http; terminate TLS on the honeypot listener instead"
+        )
+    host_header_raw = raw.get("host_header")
+    host_header = None
+    if host_header_raw is not None:
+        host_header = canonicalize_host(
+            _string(host_header_raw, f"{where}.host_header", None, 1, 255)
+        )
+    server_header = _string(
+        raw.get("server_header"),
+        f"{where}.server_header",
+        "nginx",
+        1,
+        128,
+    )
+    if any(ord(ch) < 0x20 or ord(ch) > 0x7E for ch in server_header):
+        raise ConfigError(f"{where}.server_header must be printable ASCII")
+    return HoneypotBackendConfig(
+        scheme=scheme,
+        host=_parse_isolated_backend_host(raw.get("host"), f"{where}.host"),
+        port=_int(raw.get("port"), f"{where}.port", 80, 1, 65535),
+        host_header=host_header,
+        server_header=server_header,
+        connect_timeout=_number(
+            raw.get("connect_timeout"),
+            f"{where}.connect_timeout",
+            2.0,
+            0.1,
+            60.0,
+        ),
+        read_timeout=_number(
+            raw.get("read_timeout"),
+            f"{where}.read_timeout",
+            15.0,
+            0.1,
+            300.0,
+        ),
+        total_timeout=_number(
+            raw.get("total_timeout"),
+            f"{where}.total_timeout",
+            30.0,
+            0.5,
+            3600.0,
+        ),
+        max_response_bytes=_int(
+            raw.get("max_response_bytes"),
+            f"{where}.max_response_bytes",
+            4 * 1024 * 1024,
+            1024,
+            256 * 1024 * 1024,
+        ),
+    )
+
+
+def _parse_honeypot_listeners(value: Any, server: ServerConfig) -> tuple[HoneypotListenerConfig, ...]:
+    where = "policy.honeypot.listeners"
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ConfigError(f"{where} must be an array")
+    if len(value) > 32:
+        raise ConfigError(f"{where} must not contain more than 32 entries")
+    listeners: list[HoneypotListenerConfig] = []
+    seen_names: set[str] = set()
+    seen_ports: set[int] = set()
+    for index, item in enumerate(value):
+        item_where = f"{where}[{index}]"
+        raw = _object(item, item_where, {"name", "listen_host", "listen_port", "backend"})
+        name = _string(raw.get("name"), f"{item_where}.name", None, 1, 63)
+        if not _LABEL_RE.fullmatch(name):
+            raise ConfigError(f"{item_where}.name must be a lowercase DNS-style label")
+        if name in seen_names:
+            raise ConfigError(f"{where} contains a duplicate name")
+        if raw.get("listen_port") is None:
+            raise ConfigError(f"{item_where}.listen_port is required")
+        listen_port = _int(raw.get("listen_port"), f"{item_where}.listen_port", 0, 1, 65535)
+        if listen_port in seen_ports:
+            raise ConfigError(f"{where} contains a duplicate listen_port")
+        listen_host = _string(
+            raw.get("listen_host"),
+            f"{item_where}.listen_host",
+            server.listen_host,
+            1,
+            255,
+        )
+        try:
+            listen_host = str(ipaddress.ip_address(listen_host))
+        except ValueError as exc:
+            raise ConfigError(f"{item_where}.listen_host must be an IP address") from exc
+        backend = None
+        if raw.get("backend") is not None:
+            backend = _parse_honeypot_backend(raw.get("backend"), f"{item_where}.backend")
+        seen_names.add(name)
+        seen_ports.add(listen_port)
+        listeners.append(
+            HoneypotListenerConfig(
+                name=name,
+                listen_host=listen_host,
+                listen_port=listen_port,
+                backend=backend,
+            )
+        )
+    return tuple(listeners)
+
+
+def _parse_honeypot(value: Any, server: ServerConfig) -> HoneypotConfig:
     where = "policy.honeypot"
     if value is None:
         return _default_honeypot()
-    raw = _object(value, where, {"enabled", "ban_seconds", "presets", "routes"})
+    raw = _object(value, where, {"enabled", "ban_seconds", "presets", "routes", "listeners"})
     enabled = _bool(raw.get("enabled"), f"{where}.enabled", False)
     ban_seconds = _number(raw.get("ban_seconds"), f"{where}.ban_seconds", 900.0, 0.0, 86400.0)
+    listeners = _parse_honeypot_listeners(raw.get("listeners"), server)
+    if listeners and not enabled:
+        raise ConfigError(f"{where}.listeners requires {where}.enabled to be true")
 
     preset_items = raw.get("presets")
     if preset_items is None:
@@ -996,10 +1201,15 @@ def _parse_honeypot(value: Any) -> HoneypotConfig:
     if enabled and not routes:
         raise ConfigError(f"{where}.routes or {where}.presets must not be empty when honeypot is enabled")
     routes.sort(key=lambda route: (route.path, route.id))
-    return HoneypotConfig(enabled=enabled, ban_seconds=ban_seconds, routes=tuple(routes))
+    return HoneypotConfig(
+        enabled=enabled,
+        ban_seconds=ban_seconds,
+        routes=tuple(routes),
+        listeners=listeners,
+    )
 
 
-def _parse_policy(value: Any) -> PolicyConfig:
+def _parse_policy(value: Any, server: ServerConfig) -> PolicyConfig:
     where = "policy"
     raw = _object(
         value,
@@ -1127,7 +1337,7 @@ def _parse_policy(value: Any) -> PolicyConfig:
     if response_integrity_mode not in {"off", "detect", "block"}:
         raise ConfigError("policy.response_integrity_mode must be off, detect, or block")
     integrity_pins = _parse_integrity_pins(raw.get("integrity_pins"))
-    honeypot = _parse_honeypot(raw.get("honeypot"))
+    honeypot = _parse_honeypot(raw.get("honeypot"), server)
 
     custom_security = _map(raw.get("security_headers", {}), "policy.security_headers")
     merged_security: dict[str, tuple[str, str]] = {
@@ -1575,7 +1785,7 @@ def parse_config(data: Any, base_dir: Path | str = ".", source: Path | None = No
     base = Path(base_dir).resolve(strict=False)
     server = _parse_server(raw.get("server", {}), base)
     upstream = _parse_upstream(raw.get("upstream", {}))
-    policy = _parse_policy(raw.get("policy", {}))
+    policy = _parse_policy(raw.get("policy", {}), server)
     rate_limit = _parse_rate_limit(raw.get("rate_limit", {}))
     audit = _parse_audit(raw.get("audit", {}), base)
     admin = _parse_admin(raw.get("admin", {}))
@@ -1584,6 +1794,44 @@ def parse_config(data: Any, base_dir: Path | str = ".", source: Path | None = No
     alerting = _parse_alerting(raw.get("alerting", {}))
     if admin.enabled and admin.listen_port == server.listen_port:
         raise ConfigError("admin listener must not reuse the proxy port")
+    for listener in policy.honeypot.listeners:
+        if listener.listen_port == server.listen_port:
+            raise ConfigError("honeypot listener must not reuse the proxy port")
+        if listener.listen_port == admin.listen_port:
+            raise ConfigError("honeypot listener must not reuse the admin port")
+        if listener.backend is not None:
+            backend = listener.backend
+            if _same_endpoint(backend.host, backend.port, upstream.host, upstream.port):
+                raise ConfigError(
+                    "honeypot backend must not reuse the configured business upstream"
+                )
+            if _same_endpoint(
+                backend.host,
+                backend.port,
+                listener.listen_host,
+                listener.listen_port,
+            ):
+                raise ConfigError(
+                    "honeypot backend must not point back to its own listener"
+                )
+            for other in policy.honeypot.listeners:
+                if other is not listener and _same_endpoint(
+                    backend.host,
+                    backend.port,
+                    other.listen_host,
+                    other.listen_port,
+                ):
+                    raise ConfigError(
+                        "honeypot backend must not point back to another honeypot listener"
+                    )
+            for label, host, port in (
+                ("proxy", server.listen_host, server.listen_port),
+                ("admin", admin.listen_host, admin.listen_port),
+            ):
+                if _same_endpoint(backend.host, backend.port, host, port):
+                    raise ConfigError(
+                        f"honeypot backend must not point back to the {label} listener"
+                    )
     for route in policy.routes:
         if route.max_concurrent > server.max_connections:
             raise ConfigError("policy.routes.max_concurrent must not exceed server.max_connections")
