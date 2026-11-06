@@ -34,27 +34,52 @@ class HoneypotDeploymentExampleTests(unittest.TestCase):
     def setUp(self) -> None:
         self.compose_text = (ROOT / "deploy/honeypot/docker-compose.yml").read_text(encoding="utf-8")
 
-    def test_compose_declares_two_internal_networks(self) -> None:
+    def test_compose_declares_internal_and_edge_networks(self) -> None:
         self.assertEqual(self.compose_text.count("internal: true"), 2)
         self.assertIn("name: highwall-honeypot-ssh", self.compose_text)
         self.assertIn("name: highwall-honeypot-web", self.compose_text)
         self.assertIn("subnet: 172.30.0.0/24", self.compose_text)
         self.assertIn("subnet: 172.31.0.0/24", self.compose_text)
+        self.assertIn("name: highwall-honeypot-ssh-edge", self.compose_text)
+        self.assertIn("name: highwall-honeypot-web-edge", self.compose_text)
+        self.assertIn("subnet: 172.32.0.0/24", self.compose_text)
+        self.assertIn("subnet: 172.33.0.0/24", self.compose_text)
 
     def test_published_ports_are_loopback_only(self) -> None:
+        self.assertIn("  ssh-forward:\n", self.compose_text)
+        self.assertIn("  web-forward:\n", self.compose_text)
+        self.assertEqual(self.compose_text.count("\n    ports:\n"), 2)
         self.assertIn('- "127.0.0.1:${HONEYPOT_SSH_PORT:-12222}:2222"', self.compose_text)
         self.assertIn('- "127.0.0.1:${HONEYPOT_WEB_PORT:-18080}:8080"', self.compose_text)
         self.assertNotIn('- "0.0.0.0:', self.compose_text)
 
     def test_services_drop_privileges_and_have_no_host_control(self) -> None:
-        self.assertEqual(self.compose_text.count("read_only: true"), 2)
-        self.assertEqual(self.compose_text.count("init: true"), 2)
-        self.assertEqual(self.compose_text.count("cap_drop:\n      - ALL"), 2)
+        self.assertEqual(self.compose_text.count("read_only: true"), 4)
+        self.assertEqual(self.compose_text.count("init: true"), 4)
+        self.assertEqual(self.compose_text.count("cap_drop:\n      - ALL"), 4)
+        self.assertIn("      - NET_ADMIN\n", self.compose_text)
+        self.assertIn("      - SETPCAP\n", self.compose_text)
         self.assertNotIn("privileged: true", self.compose_text)
         self.assertNotIn("network_mode: host", self.compose_text)
         self.assertNotIn("pid: host", self.compose_text)
         self.assertNotIn("docker.sock", self.compose_text)
         self.assertNotIn("\n    volumes:", self.compose_text)
+
+    def test_forwarders_target_fixed_decoy_addresses(self) -> None:
+        self.assertIn('TARGET_HOST: "172.30.0.10"', self.compose_text)
+        self.assertIn('TARGET_PORT: "2222"', self.compose_text)
+        self.assertIn('TARGET_HOST: "172.31.0.20"', self.compose_text)
+        self.assertIn('TARGET_PORT: "8080"', self.compose_text)
+
+    def test_relay_removes_egress_and_drops_privileges(self) -> None:
+        relay = (ROOT / "deploy/honeypot/relay/relay.py").read_text(encoding="utf-8")
+        self.assertIn('["ip", "route", "del", "default"]', relay)
+        self.assertIn("PR_CAPBSET_DROP", relay)
+        self.assertIn("os.setgid", relay)
+        self.assertIn("os.setuid", relay)
+        self.assertIn("ipaddress.ip_address(target_host)", relay)
+        self.assertIn("TARGET_HOST must be an IP literal", relay)
+        self.assertTrue((ROOT / "deploy/honeypot/relay/Dockerfile").is_file())
 
     def test_secret_file_and_verification_helpers_are_documented(self) -> None:
         self.assertTrue((ROOT / "deploy/honeypot/verify.py").is_file())

@@ -7,6 +7,7 @@ import http.client
 import socket
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Iterable
@@ -151,7 +152,7 @@ def _check_running(services: Iterable[str]) -> str:
 
 
 def _check_loopback_ports() -> str:
-    checks = (("ssh-live", "2222"), ("web-live", "8080"))
+    checks = (("ssh-forward", "2222"), ("web-forward", "8080"))
     details: list[str] = []
     for service, container_port in checks:
         process = _compose("port", service, container_port)
@@ -188,6 +189,64 @@ def _check_web_egress_blocked() -> str:
     return "web container has no public egress"
 
 
+def _check_forwarder_egress_blocked() -> str:
+    script = (
+        "import socket, sys\n"
+        "sock = socket.socket()\n"
+        "sock.settimeout(2)\n"
+        "try:\n"
+        "    sock.connect(('1.1.1.1', 80))\n"
+        "except OSError:\n"
+        "    print('BLOCKED')\n"
+        "    sys.exit(0)\n"
+        "print('REACHABLE')\n"
+        "sys.exit(1)\n"
+    )
+    checked: list[str] = []
+    for service in ("ssh-forward", "web-forward"):
+        process = _compose("exec", "-T", service, "python", "-c", script)
+        _require(
+            "REACHABLE" not in process.stdout,
+            f"{service} can reach the public Internet",
+        )
+        _require(
+            "BLOCKED" in process.stdout,
+            f"{service} egress check failed: {(process.stderr or process.stdout).strip()}",
+        )
+        checked.append(service)
+    return f"{', '.join(checked)} have no public egress"
+
+
+def _check_forwarder_isolation() -> str:
+    script = (
+        "import socket, sys\n"
+        "sock = socket.socket()\n"
+        "sock.settimeout(2)\n"
+        "try:\n"
+        "    sock.connect((sys.argv[1], int(sys.argv[2])))\n"
+        "except OSError:\n"
+        "    print('BLOCKED')\n"
+        "    sys.exit(0)\n"
+        "print('REACHABLE')\n"
+        "sys.exit(1)\n"
+    )
+    checks = (
+        ("ssh-forward", "172.31.0.20", "8080"),
+        ("web-forward", "172.30.0.10", "2222"),
+    )
+    for service, host, port in checks:
+        process = _compose("exec", "-T", service, "python", "-c", script, host, port)
+        _require(
+            "REACHABLE" not in process.stdout,
+            f"{service} can reach the other decoy network",
+        )
+        _require(
+            "BLOCKED" in process.stdout,
+            f"{service} isolation check failed: {(process.stderr or process.stdout).strip()}",
+        )
+    return "forwarders cannot reach the other decoy network"
+
+
 def _check_cross_container_blocked() -> str:
     process = _compose(
         "exec",
@@ -209,11 +268,17 @@ def _check_cross_container_blocked() -> str:
     return "SSH and web containers are network-isolated"
 
 
-def _run(name: str, check: Callable[[], str]) -> Result:
-    try:
-        return Result(name, "PASS", check())
-    except (CheckFailed, OSError, http.client.HTTPException, subprocess.SubprocessError) as exc:
-        return Result(name, "FAIL", str(exc))
+def _run(name: str, check: Callable[[], str], *, attempts: int = 1, retry_delay: float = 0.5) -> Result:
+    last_error: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            return Result(name, "PASS", check())
+        except (CheckFailed, OSError, http.client.HTTPException, subprocess.SubprocessError) as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(retry_delay)
+    assert last_error is not None
+    return Result(name, "FAIL", str(last_error))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -232,9 +297,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     results = [
-        _run("web/login", lambda: _check_web_login(args.web_host, args.web_port, args.timeout)),
-        _run("web/session", lambda: _check_web_session(args.web_host, args.web_port, args.timeout)),
-        _run("ssh/banner", lambda: _check_ssh_banner(args.ssh_host, args.ssh_port, args.timeout)),
+        _run(
+            "web/login",
+            lambda: _check_web_login(args.web_host, args.web_port, args.timeout),
+            attempts=20,
+        ),
+        _run(
+            "web/session",
+            lambda: _check_web_session(args.web_host, args.web_port, args.timeout),
+            attempts=20,
+        ),
+        _run(
+            "ssh/banner",
+            lambda: _check_ssh_banner(args.ssh_host, args.ssh_port, args.timeout),
+            attempts=20,
+        ),
     ]
 
     if args.docker != "skip":
@@ -242,10 +319,15 @@ def main(argv: list[str] | None = None) -> int:
         if ready:
             results.extend(
                 [
-                    _run("docker/services", lambda: _check_running(("ssh-live", "web-live"))),
+                    _run(
+                        "docker/services",
+                        lambda: _check_running(("ssh-live", "web-live", "ssh-forward", "web-forward")),
+                    ),
                     _run("docker/loopback", _check_loopback_ports),
                     _run("docker/web-egress", _check_web_egress_blocked),
+                    _run("docker/forwarder-egress", _check_forwarder_egress_blocked),
                     _run("docker/cross-network", _check_cross_container_blocked),
+                    _run("docker/forwarder-isolation", _check_forwarder_isolation),
                 ]
             )
         elif args.docker == "require":
