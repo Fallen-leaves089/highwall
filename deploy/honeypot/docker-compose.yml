@@ -7,8 +7,8 @@ services:
       args:
         HONEYPOT_SSH_PASSWORD: ${HONEYPOT_SSH_PASSWORD:-highwall-decoy-only}
     container_name: highwall-honeypot-ssh
-    ports:
-      - "127.0.0.1:${HONEYPOT_SSH_PORT:-12222}:2222"
+    expose:
+      - "2222"
     networks:
       honeypot-ssh:
         ipv4_address: 172.30.0.10
@@ -42,8 +42,8 @@ services:
     build:
       context: ./web
     container_name: highwall-honeypot-web
-    ports:
-      - "127.0.0.1:${HONEYPOT_WEB_PORT:-18080}:8080"
+    expose:
+      - "8080"
     environment:
       DECOY_PORT: "8080"
       PYTHONDONTWRITEBYTECODE: "1"
@@ -67,6 +67,78 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  ssh-forward:
+    build:
+      context: ./relay
+    image: highwall-honeypot-relay
+    container_name: highwall-honeypot-ssh-forward
+    depends_on:
+      - ssh-live
+    ports:
+      - "127.0.0.1:${HONEYPOT_SSH_PORT:-12222}:2222"
+    environment:
+      LISTEN_PORT: "2222"
+      TARGET_HOST: "172.30.0.10"
+      TARGET_PORT: "2222"
+    networks:
+      - honeypot-ssh-edge
+      - honeypot-ssh
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - SETGID
+      - SETPCAP
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 64m
+    cpus: "0.25"
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web-forward:
+    build:
+      context: ./relay
+    image: highwall-honeypot-relay
+    container_name: highwall-honeypot-web-forward
+    depends_on:
+      - web-live
+    ports:
+      - "127.0.0.1:${HONEYPOT_WEB_PORT:-18080}:8080"
+    environment:
+      LISTEN_PORT: "8080"
+      TARGET_HOST: "172.31.0.20"
+      TARGET_PORT: "8080"
+    networks:
+      - honeypot-web-edge
+      - honeypot-web
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+      - SETGID
+      - SETPCAP
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 64
+    mem_limit: 64m
+    cpus: "0.25"
+    restart: unless-stopped
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   honeypot-ssh:
     name: highwall-honeypot-ssh
@@ -82,3 +154,15 @@ networks:
     ipam:
       config:
         - subnet: 172.31.0.0/24
+  honeypot-ssh-edge:
+    name: highwall-honeypot-ssh-edge
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.32.0.0/24
+  honeypot-web-edge:
+    name: highwall-honeypot-web-edge
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.33.0.0/24

@@ -4,7 +4,8 @@
 接入。它刻意**不是**生产应用、身份系统、数据库或管理网的复制品。
 
 网关只把流量转发给专用诱饵后端。真实 SSH 与 HTTP 服务运行在独立容器中，
-根文件系统只读、能力被移除、宿主端口只绑定回环、没有公网出网能力。
+根文件系统只读、能力被移除、没有公网出网能力。宿主端口由两个最小转发容器
+发布到回环地址；转发容器启动后删除默认路由、丢弃能力并以非特权用户运行。
 
 ## 拓扑
 
@@ -19,23 +20,28 @@
         +--------------------------+
         |                          |
         v                          v
+  ssh-forward                web-forward
+  127.0.0.1:12222            127.0.0.1:18080
+        |                          |
+        v                          v
   highwall-honeypot-ssh    highwall-honeypot-web
   172.30.0.10:2222         172.31.0.20:8080
   真实 OpenSSH             有状态的登录/管理台诱饵
         |                          |
-        `------ 两个独立 internal 网络 ------'
+        `------ 两个独立 internal 网络 -----'
 ```
 
 SSH 与 Web 容器分别位于两个独立的 Docker internal 网络，既不能访问公网，
-也不能互相访问。宿主网关使用发布到 `127.0.0.1` 的端口；容器化网关必须显式
-接入两个网络，并使用固定私网 IP，因为 `backend` 配置只接受 IP 字面量，
-不接受 Docker 服务名。
+也不能互相访问。两个转发容器各自位于独立的 edge 网络，启动后删除默认路由并
+以 UID 65534 运行，不能访问公网或另一诱饵网络。宿主网关使用发布到
+`127.0.0.1` 的端口；容器化网关必须显式接入两个 internal 网络，并使用固定
+私网 IP，因为 `backend` 配置只接受 IP 字面量，不接受 Docker 服务名。
 
 ## 前置条件
 
 - Docker Engine 或 Docker Desktop，带 Compose v2。
 - 对目标网络有明确授权。不要在你没有所有权或管理权的网络上部署。
-- 默认容器合计约 1 vCPU、384 MiB 内存，不含 Docker 自身和网关开销。
+- 默认容器合计约 1.5 vCPU、512 MiB 内存，不含 Docker 自身和网关开销。
 - 不要放入真实凭据、客户数据、私钥、生产数据库快照或宿主目录挂载。
   这些诱饵应当随时可以丢弃和重建。
 
@@ -49,12 +55,15 @@ docker compose up -d --build
 python verify.py --docker require
 ```
 
+首次启动时 Docker Desktop 的端口转发可能晚几秒就绪；验收脚本会最多等待
+10 秒，因此无需手工反复重试。
+
 默认宿主绑定：
 
-| 服务 | 宿主绑定 | 容器端口 |
-|---|---|---:|
-| SSH 诱饵 | `127.0.0.1:12222` | `2222` |
-| Web 诱饵 | `127.0.0.1:18080` | `8080` |
+| 服务 | 转发容器 | 宿主绑定 | 诱饵端口 |
+|---|---|---|---:|
+| SSH 诱饵 | `highwall-honeypot-ssh-forward` | `127.0.0.1:12222` | `2222` |
+| Web 诱饵 | `highwall-honeypot-web-forward` | `127.0.0.1:18080` | `8080` |
 
 端口只发布到回环地址。不要在不可信网络上改成 `0.0.0.0`。如果网关位于另一台
 主机，应让诱饵主机保持私网，在主机防火墙限制来源，并通过专用网络连接。
@@ -168,10 +177,14 @@ docker network connect highwall-honeypot-ssh <gateway-container>
 管理网关时，应把这两个网络声明为 `external`，不要只依赖一次性的
 `docker network connect`。
 
+宿主网关使用本目录的转发容器即可。若网关本身容器化，应直接接入两个 internal
+网络，不要再经过宿主回环转发端口，因为容器内通常访问不到宿主的 `127.0.0.1`。
+
 ## 验收
 
 `verify.py` 只使用 Python 标准库。它会检查 Web 登录与会话流、OpenSSH banner、
-发布端口是否只绑定回环、容器是否无法访问公网，以及 SSH 与 Web 是否网络隔离。
+转发端口是否只绑定回环、所有容器是否无法访问公网，以及 SSH、Web 和两个转发
+容器之间是否隔离。
 
 ```powershell
 python verify.py --docker require
@@ -184,9 +197,11 @@ python verify.py --docker require
 [PASS] web/session: login redirect and session flow work
 [PASS] ssh/banner: SSH-2.0-OpenSSH_...
 [PASS] docker/services: containers are running
-[PASS] docker/loopback: ssh-live=127.0.0.1:..., web-live=127.0.0.1:...
+[PASS] docker/loopback: ssh-forward=127.0.0.1:..., web-forward=127.0.0.1:...
 [PASS] docker/web-egress: web container has no public egress
+[PASS] docker/forwarder-egress: ssh-forward, web-forward have no public egress
 [PASS] docker/cross-network: SSH and web containers are network-isolated
+[PASS] docker/forwarder-isolation: forwarders cannot reach the other decoy network
 ```
 
 Docker 不可用时，`--docker auto` 会跳过 Docker 专属检查，只验证宿主端口。
@@ -229,6 +244,10 @@ docker compose up -d
 - HighWall 返回 `502`/`504`：Web 诱饵没启动、端口不对或超时。
 - L4Wall 审计出现 `backend_unreachable`：检查 `127.0.0.1:12222` 和容器状态。
 - 浏览器反复跳回登录页：确认客户端发送了允许的 Host，并保留伪 `session` Cookie。
+- `12222`/`18080` 不通：先确认 `ssh-forward`、`web-forward` 都在运行；internal
+  网络不能直接发布端口，端口必须经过转发容器。
+- 转发容器反复退出：`docker compose logs ssh-forward web-forward`；它会在无法
+  删除默认路由或无法降权时主动退出，不要绕过这个失败。
 - `verify.py` 报公网可达：立即停止部署，先修正 Docker 网络，不要继续收集交互。
 
 ## 安全、隐私与法务边界
@@ -240,6 +259,8 @@ docker compose up -d
   挂载进诱饵。
 - 保持 Docker、内核和容器运行时为最新版本。容器内 root 不是宿主 root，
   但仍是实际攻击面。
+- 转发容器启动时需要短暂使用 `NET_ADMIN` 删除默认路由，随后丢弃能力并以
+  UID 65534 运行；它仍可访问对应诱饵和宿主发布接口，不能访问公网或另一诱饵网络。
 - 诱饵日志可能包含来源 IP、攻击者输入的凭据和上传内容。部署前先确定收集目的、
   访问权限、保留期限、删除流程和事件升级路径，并遵守适用的隐私与网络安全法规。
 - 不反制、不反向连接、不投放恶意代码、不收集授权范围外的数据。HighWall 和
@@ -263,7 +284,7 @@ docker compose up -d
 | 形态 | 基础设施 | 工程与运维 | 主要风险 |
 |---|---|---|---|
 | 静态模板 | 几乎可忽略 | 小时级 | 易被指纹识别，交互有限 |
-| 本目录的隔离高交互闭环 | 约 1 vCPU / 384 MiB，另加网关 | 每个服务数天 | 诱饵被攻陷、容器逃逸 |
+| 本目录的隔离高交互闭环 | 约 1.5 vCPU / 512 MiB，另加网关 | 每个服务数天 | 诱饵被攻陷、容器逃逸 |
 | 完整业务栈复制 | 4–16+ vCPU、8–32+ GiB 内存，另加数据库和存储 | 数周到数月，之后持续维护 | 成本高、数据泄漏、环境漂移、法务暴露 |
 
 硬件通常不是最大成本。真正昂贵的是可信的假数据、隔离工程、取证准备、持续补丁，
@@ -271,7 +292,8 @@ docker compose up -d
 
 ## 文件
 
-- `docker-compose.yml`：隔离容器、回环端口、资源限制和独立网络。
+- `docker-compose.yml`：隔离容器、回环转发、资源限制和独立网络。
+- `relay/relay.py`、`relay/Dockerfile`：删除默认路由并降权的 TCP 转发容器。
 - `web/decoy.py`：有状态伪登录和管理台。
 - `ssh/Dockerfile`、`ssh/sshd_config`：受限容器中的真实 OpenSSH。
 - `verify.py`：无第三方依赖的验收脚本。
