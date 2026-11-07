@@ -17,6 +17,7 @@ certs/
 coverage.xml
 htmlcov/
 /deploy/standard/.env
+/deploy/honeypot/.env
 /reports/
 .mypy_cache/
 .ruff_cache/

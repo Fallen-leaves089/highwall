@@ -1,0 +1,143 @@
+name: L4Wall Release
+
+on:
+  push:
+    tags: ["l4wall-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing L4Wall tag to publish, for example l4wall-v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  attestations: write
+  contents: write
+  id-token: write
+
+concurrency:
+  group: l4wall-release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  PACKAGE_DIR: subprojects/l4wall
+
+jobs:
+  verify:
+    name: Verify / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install static analysis tools
+        if: matrix.python-version == '3.12'
+        run: python -m pip install --disable-pip-version-check "ruff==0.17.3" "mypy==2.4.0"
+
+      - name: Test
+        working-directory: ${{ env.PACKAGE_DIR }}
+        run: python -m unittest discover -s tests -v
+
+      - name: Static checks
+        if: matrix.python-version == '3.12'
+        working-directory: ${{ env.PACKAGE_DIR }}
+        run: |
+          python -m ruff check l4wall tests scripts
+          python -m mypy l4wall
+          python -m l4wall check --config config.example.json
+
+  release:
+    name: Build packages and publish release
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Resolve tag and version
+        id: version
+        shell: bash
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          case "$tag" in
+            l4wall-v*) ;;
+            *) echo "::error::expected an l4wall-v* tag, got $tag"; exit 1 ;;
+          esac
+          version="${tag#l4wall-v}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Build wheel and sdist
+        run: |
+          python -m pip install --disable-pip-version-check "build==1.3.0"
+          python -m build --sdist --wheel --outdir dist "${{ env.PACKAGE_DIR }}"
+
+      - name: Check artifact names and contents
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test -f "dist/l4wall-${VERSION}-py3-none-any.whl"
+          test -f "dist/l4wall-${VERSION}.tar.gz"
+          python "${{ env.PACKAGE_DIR }}/scripts/check_dist.py" dist
+
+      - name: Install wheel and check CLI
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          python -m venv "$RUNNER_TEMP/l4wall-venv"
+          "$RUNNER_TEMP/l4wall-venv/bin/pip" install --disable-pip-version-check dist/*.whl
+          installed="$("$RUNNER_TEMP/l4wall-venv/bin/l4wall" --version | awk '{print $2}')"
+          test "$installed" = "$VERSION"
+          "$RUNNER_TEMP/l4wall-venv/bin/l4wall" --version
+          "$RUNNER_TEMP/l4wall-venv/bin/l4wall" check --config "${{ env.PACKAGE_DIR }}/config.example.json"
+
+      - name: Create checksums
+        run: |
+          cd dist
+          sha256sum l4wall-*.whl l4wall-*.tar.gz > SHA256SUMS
+
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+
+      - name: Prepare release notes
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test "$(head -n 1 "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.md")" = "# L4Wall $VERSION"
+          test "$(head -n 1 "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.en.md")" = "# L4Wall $VERSION"
+          cp "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.md" release-notes.md
+          printf '\n\n---\n\n' >> release-notes.md
+          cat "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.en.md" >> release-notes.md
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+            gh release edit "$TAG" --title "L4Wall $VERSION" --notes-file release-notes.md --latest=false
+          else
+            gh release create "$TAG" dist/* --verify-tag --title "L4Wall $VERSION" --notes-file release-notes.md --latest=false
+          fi

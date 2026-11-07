@@ -70,6 +70,12 @@ l4wall check --config config.json
 l4wall run --config config.json
 ```
 
+## 发布与下载
+
+`0.1.0` 已作为独立 Release 发布：[L4Wall 0.1.0](https://github.com/Fallen-leaves089/highwall/releases/tag/l4wall-v0.1.0)。独立发布的 wheel、sdist 和只含 L4Wall 文件的 `SHA256SUMS` 以该 Release 的 **Assets** 为准；`v0.11.0` 页面只保留兼容旧链接的原始附件。不提供 GHCR 镜像、PyPI 包或其他下载渠道，也不附带 HighWall、L5Wall 或原生核心二进制。
+
+这个 `0.1.0` 包是 `v0.11.0` 官方历史资产的原样复用，不包含当前 `main` 后续加入的改动。完整说明见 [RELEASE-NOTES.md](docs/RELEASE-NOTES.md)。
+
 ## 配置要点
 
 完整示例见 [config.example.json](config.example.json)。
@@ -79,6 +85,7 @@ l4wall run --config config.json
 | `server.listen_host` | 所有 listener 的绑定地址 | 单机先用 `127.0.0.1`；对外服务再显式改 |
 | `server.max_connections` | 全局并发连接上限 | 按文件描述符和上游容量设置 |
 | `server.max_connections_per_ip` | 单来源并发上限 | 防止单 IP 占满槽位 |
+| `server.max_honeypot_connections` | 所有蜜罐 listener 的全局并发上限 | 与业务连接槽位分离，按诱捕容量设置 |
 | `server.require_client_allowlist` | 强制每个 listener 配来源白名单 | 生产建议开启 |
 | `listeners[].allowed_client_networks` | 来源 CIDR 白名单 | 空表示允许所有未被拒绝的来源 |
 | `listeners[].denied_client_networks` | 来源 CIDR 黑名单 | 拒绝优先于允许 |
@@ -92,12 +99,75 @@ l4wall run --config config.json
 | `threat_detection.agent_*` | Agent 行为评分参数 | 结合审计调阈值，不要照搬 |
 | `threat_detection.ban_prefix_v4/v6` | 封禁聚合前缀 | 默认精确封禁；确认网段归属后再用 `/24`、`/64` |
 | `threat_detection.shared_bans` | 可选 Redis 共享封禁读取 | 默认关闭；只连私网，本地封禁始终优先 |
+| `honeypots[].listen_port` | 独立蜜罐监听端口 | 不得与业务 listener 或管理端口重复 |
+| `honeypots[].template` | 内置 TCP 诱饵模板或 `custom` | 模板只做合成 banner/问答，不是完整协议仿真 |
+| `honeypots[].ban_seconds` | 命中蜜罐后的封禁秒数 | 默认 `0`；先观察再启用 |
 | `audit.on_write_failure` | 审计失败策略 | 保持 `fail_closed` |
 | `admin.enabled` | 回环管理面 | 只在需要时开启，token 从环境变量读取 |
 
 配置是严格 JSON：未知字段、重复端口、非法 CIDR、非回环管理面都会直接报错，网关不会带着半套策略启动。
 
 `audit.path` 和 `threat_detection.offender_path` 如果写相对路径，会相对 `--config` 所在目录解析，而不是相对启动时的当前目录。这样从快捷方式、计划任务或任意目录启动都能找到同一份审计和封禁文件。
+
+### 独立 TCP 蜜罐
+
+`honeypots` 在业务 `listeners` 之外开启独立 TCP 诱捕端口。默认由本地合成 banner/问答响应，不连接任何上游，也不占用业务连接的全局并发槽位。可选 `backend_host`/`backend_port` 把会话转发到隔离的真实 TCP 服务。内置 28 个模板：
+
+```text
+ssh, telnet, ftp, smtp, pop3, imap, redis, memcached, mysql, postgresql,
+mqtt, vnc, rtsp, sip, ldap, modbus, socks5, rdp, rsync, irc, amqp, git,
+http, docker, elasticsearch, kubernetes, xmpp, stomp
+```
+
+最小配置：
+
+```json
+"honeypots": [
+  {"name": "ssh-decoy", "listen_port": 18092, "template": "ssh", "ban_seconds": 0}
+]
+```
+
+高交互 SSH 示例（后端必须是回环或私网 IP 字面量）：
+
+```json
+{
+  "name": "ssh-live",
+  "listen_host": "127.0.0.1",
+  "listen_port": 18094,
+  "template": "custom",
+  "backend_host": "127.0.0.1",
+  "backend_port": 12222,
+  "backend_connect_timeout": 2,
+  "max_bytes_in": 4194304,
+  "max_bytes_out": 4194304,
+  "max_connection_seconds": 1800,
+  "ban_seconds": 0
+}
+```
+
+| 字段 | 说明 |
+|---|---|
+| `name` | 蜜罐名称，必须与业务 listener 和其他蜜罐唯一；用于日志和审计 |
+| `listen_host` | 可选，默认继承 `server.listen_host` |
+| `listen_port` | 必填；不得与业务 listener、管理面或其他蜜罐端口冲突 |
+| `template` | 内置模板名或 `custom`；未知名称启动失败 |
+| `backend_host` / `backend_port` | 可选，必须成对设置；只允许回环、RFC1918 或 IPv6 ULA 的 IP 字面量。不得指向业务 upstream、业务 listener、管理面、自身或其他蜜罐端口 |
+| `backend_connect_timeout` | 连接高交互后端的秒数，默认 2，最大 60 |
+| `banner_text` / `banner_hex` | 覆盖模板 banner；两者只能选一个，最大 16 KiB |
+| `rules[]` | 最多 64 条；每条用 `expect_text`/`expect_hex` 匹配，用 `reply_text`/`reply_hex` 回复；expect 最大 4 KiB，reply 最大 16 KiB |
+| `default_reply_text` / `default_reply_hex` | 未匹配规则时的回复，最大 16 KiB |
+| `close_after_banner` / `close_after_reply` | 发送 banner 或回复后立即关闭 |
+| `max_exchanges` | 最多问答轮次，0–1000 |
+| `allowed_client_networks` / `denied_client_networks` | 每个蜜罐独立来源 CIDR 策略，拒绝优先 |
+| `first_byte_timeout` / `idle_timeout` / `max_connection_seconds` | 首字节、空闲和总连接时长上限 |
+| `max_bytes_in` / `max_bytes_out` | 收发字节上限，默认各 64 KiB |
+| `max_connections_per_ip` | 单来源并发上限，不得超过 `server.max_honeypot_connections` |
+| `new_connections_per_second` / `new_connections_burst` | 每个蜜罐独立的新建连接令牌桶 |
+| `ban_seconds` | 命中后写入共享封禁表的秒数；`0` 表示只审计不封禁 |
+
+蜜罐连接会经过来源 ACL、封禁检查、蜜罐全局并发、单 IP 并发和令牌桶；审计写入失败时拒绝新连接。审计事件包括 `honeypot_hit`、`honeypot_closed`、`honeypot_denied` 和 `source_banned`；高交互后端另有 `honeypot_backend_connected`、`honeypot_backend_closed` 和 `honeypot_backend_error`。普通指标前缀为 `l4wall_honeypot_`，后端连接与错误分别看 `l4wall_honeypot_backend_connections_total` 和 `l4wall_honeypot_backend_errors_total`。命中后的封禁写入同一个封禁表，因此会同时影响业务 listener 和全部蜜罐端口。
+
+内置模板是**低交互诱捕**，不是 MySQL、PostgreSQL、MQTT 等协议的完整实现：它们不解析真实认证、不读文件、不执行命令，也不采集 payload。攻击者可以通过握手细节、响应时序和协议兼容性识别它们。配置 `backend_*` 后可提供真实 TCP 交互，但真实服务、容器隔离、补丁、快照、重置和取证都需要独立建设；仓库提供的隔离 SSH 骨架见 [`deploy/honeypot`](../../deploy/honeypot/README.md)。高交互后端是可被攻陷资产，不能直接暴露公网，`ban_seconds` 在调查期间通常应保持 0。
 
 ### 共享封禁（可选）
 
@@ -164,6 +234,7 @@ Redis 值必须是版本化 JSON：
 - **慢连接占用**：首字节超时、空闲超时、单连接最长寿命。
 - **连接型探测**：多 listener 扇出、短连接、零字节探测、拒绝风暴、固定间隔节奏。
 - **自动化 Agent 行为**：达到阈值后按 `score` 只记录、`throttle` 延迟、`block` 拒绝并封禁。
+- **独立协议诱捕**：28 个 TCP 模板在独立端口提供合成 banner/问答；可自定义文本、十六进制和匹配规则，也可把专用端口转发到隔离真实后端。
 - **封禁持久化**：`offenders.json` 原子写入，重启后仍生效；支持 IPv4 `/24`、IPv6 `/64` 聚合。
 - **共享封禁读取**：可选从私网 Redis 增量导入，故障隔离、TTL 截断、容量保护和本地优先。
 - **审计与排障**：JSONL 固定字段、轮转、敏感字段不落盘；审计失败默认拒绝新连接。
@@ -175,6 +246,7 @@ Redis 值必须是版本化 JSON：
 - **全端口可见性**：它只保护配置过的 listener。要覆盖整机所有端口，仍需 Windows 防火墙、WFP、nftables 或云安全组。
 - **已失陷主机**：如果攻击者已经能在同一主机上读写进程内存、配置或审计文件，L4Wall 不能建立可信边界。
 - **内容与身份**：它不解析 HTTP、不读 payload、不做认证授权；L4 看不到 User-Agent、Cookie 或路径。
+- **完整协议仿真**：内置 TCP 模板只生成有限的合成响应，不实现真实协议状态机、认证、加密或应用漏洞；`backend_*` 只提供透明 TCP 转发，真实协议行为仍由外部服务决定。仓库不包含完整业务栈复制。
 - **Agent 身份识别**：这里的 “Agent” 指自动化扫描/爆破/连接洪泛行为，不是对某个 AI 代理的身份认证。会模仿正常流量、使用住宅代理或低频慢速的 Agent 可以绕过启发式评分。
 - **TLS 内容**：当前版本不做 TLS 终止、SNI 白名单或 JA3/JA4 指纹；这些属于后续 L5/L6 能力。
 
@@ -198,7 +270,7 @@ python -m l4wall inspect --config config.json
 
 `inspect` 只输出生效配置，不输出密码或管理令牌的环境变量名，可安全粘贴到工单。
 
-测试覆盖配置严格性、CIDR 策略、令牌桶、审计轮转、Agent 评分、封禁持久化、回环转发、来源拒绝、连接限速、首字节超时、字节上限、单 IP 并发上限、PROXY v2 编码与上游首包、封禁检查独立于评分开关，以及共享封禁的超时、坏 JSON、超大响应、空键、过期/跨版本条目、TTL 截断和本地优先合并。跨层回环攻防验收见 [docs/ATTACK_TESTING.md](../../docs/ATTACK_TESTING.md)。
+测试覆盖配置严格性、CIDR 策略、令牌桶、审计轮转、Agent 评分、封禁持久化、回环转发、来源拒绝、连接限速、首字节超时、字节上限、单 IP 并发上限、PROXY v2 编码与上游首包、封禁检查独立于评分开关、独立 TCP 蜜罐模板与自定义规则、高交互双向转发与后端失败审计，以及共享封禁的超时、坏 JSON、超大响应、空键、过期/跨版本条目、TTL 截断和本地优先合并。跨层回环攻防验收见 [docs/ATTACK_TESTING.md](../../docs/ATTACK_TESTING.md)。
 
 ## 目录
 

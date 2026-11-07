@@ -490,6 +490,38 @@ async fn live_tcp_tls_h2_listener_reaches_upstream() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn live_tcp_listener_survives_connection_churn() {
+    let server = start_server_with_options(
+        ProxyProtocolConfig::default(),
+        None,
+        None,
+        Vec::new(),
+        |config| {
+            config.limits.max_connections_per_ip = 512;
+            config.limits.max_tls_handshakes_per_second_per_ip = 10_000.0;
+            config.limits.max_tls_handshake_burst_per_ip = 20_000.0;
+        },
+    )
+    .await;
+
+    for _ in 0..128 {
+        let stream = timeout(Duration::from_secs(2), TcpStream::connect(server.tcp))
+            .await
+            .expect("connection churn attempt timed out")
+            .expect("listener stopped accepting during connection churn");
+        drop(stream);
+    }
+    sleep(Duration::from_millis(100)).await;
+
+    let (mut client, driver) = connect_h2(&server).await;
+    let (status, _headers, body) = send_h2_get(&mut client, "/ok").await;
+    assert_eq!(status, http::StatusCode::OK);
+    assert_eq!(body, b"ok");
+    assert_eq!(server.upstream_hits.load(Ordering::SeqCst), 1);
+    driver.abort();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn live_ban_remains_observable_after_tls_handshake() {
     let server = start_server_with_options(
         ProxyProtocolConfig::default(),

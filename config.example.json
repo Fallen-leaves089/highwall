@@ -68,7 +68,19 @@
     "honeypot": {
       "enabled": true,
       "ban_seconds": 0,
-      "presets": ["common"]
+      "presets": ["common"],
+      "listeners": [
+        {
+          "name": "decoy-admin",
+          "listen_host": "127.0.0.1",
+          "listen_port": 18092
+        },
+        {
+          "name": "decoy-api",
+          "listen_host": "127.0.0.1",
+          "listen_port": 18093
+        }
+      ]
     },
     "reject_encoded_separators": true,
     "allow_path_parameters": false,
@@ -125,7 +137,7 @@
   },
   "threat_detection": {
     "enabled": true,
-    "mode": "tarpit",
+    "mode": "monitor",
     "agent_mode": "score",
     "agent_min_signals": 3,
     "agent_score": 30,

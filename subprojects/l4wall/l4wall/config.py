@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .errors import ConfigError
+from .honeypot_templates import HONEYPOT_TEMPLATES, HoneypotRule, TcpHoneypotTemplate
 
 CONFIG_VERSION = 1
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -111,11 +112,66 @@ def _is_loopback_host(host: str) -> bool:
     return address.is_loopback
 
 
+_ISOLATED_BACKEND_NETWORKS = tuple(
+    ipaddress.ip_network(value)
+    for value in (
+        "10.0.0.0/8",
+        "172.16.0.0/12",
+        "192.168.0.0/16",
+        "127.0.0.0/8",
+        "::1/128",
+        "fc00::/7",
+    )
+)
+
+
+def _isolated_backend_host(value: Any, where: str) -> str:
+    text = _string(value, where).strip()
+    try:
+        address = ipaddress.ip_address(text)
+    except ValueError as exc:
+        raise ConfigError(
+            f"{where} must be an IP literal in loopback, RFC1918, or IPv6 ULA space"
+        ) from exc
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped:
+        address = address.ipv4_mapped
+    if not any(address in network for network in _ISOLATED_BACKEND_NETWORKS):
+        raise ConfigError(
+            f"{where} must be an IP literal in loopback, RFC1918, or IPv6 ULA space"
+        )
+    return str(address)
+
+
+def _normalized_ip(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+    try:
+        address = ipaddress.ip_address(value.strip())
+    except ValueError:
+        return None
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    return address
+
+
+def _same_endpoint(host_a: str, port_a: int, host_b: str, port_b: int) -> bool:
+    if port_a != port_b:
+        return False
+    address_a = _normalized_ip(host_a)
+    address_b = _normalized_ip(host_b)
+    if address_a is None or address_b is None:
+        return host_a.strip().rstrip(".").lower() == host_b.strip().rstrip(".").lower()
+    if address_a.version != address_b.version:
+        return False
+    if address_a.is_unspecified or address_b.is_unspecified:
+        return address_a.is_loopback or address_b.is_loopback or address_a == address_b
+    return address_a == address_b
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     listen_host: str
     max_connections: int
     max_connections_per_ip: int
+    max_honeypot_connections: int
     accept_backlog: int
     shutdown_timeout: float
     require_client_allowlist: bool
@@ -139,6 +195,35 @@ class ListenerConfig:
     new_connections_burst: int
     read_chunk_bytes: int
     send_proxy_v2: bool
+
+
+@dataclass(frozen=True)
+class HoneypotConfig:
+    name: str
+    listen_host: str
+    listen_port: int
+    template: str
+    backend_host: str | None
+    backend_port: int | None
+    backend_connect_timeout: float
+    banner: bytes
+    rules: tuple[HoneypotRule, ...]
+    default_reply: bytes
+    close_after_banner: bool
+    close_after_reply: bool
+    max_exchanges: int
+    allowed_client_networks: tuple[IPNetwork, ...]
+    denied_client_networks: tuple[IPNetwork, ...]
+    first_byte_timeout: float
+    idle_timeout: float
+    max_connection_seconds: float
+    max_bytes_in: int
+    max_bytes_out: int
+    max_connections_per_ip: int
+    new_connections_per_second: float
+    new_connections_burst: int
+    read_chunk_bytes: int
+    ban_seconds: float
 
 
 @dataclass(frozen=True)
@@ -213,17 +298,19 @@ class GatewayConfig:
     version: int
     server: ServerConfig
     listeners: tuple[ListenerConfig, ...]
+    honeypots: tuple[HoneypotConfig, ...]
     threat: ThreatConfig
     audit: AuditConfig
     admin: AdminConfig
     metrics_enabled: bool
 
 
-_TOP_KEYS = {"version", "server", "listeners", "threat_detection", "audit", "admin", "metrics"}
+_TOP_KEYS = {"version", "server", "listeners", "honeypots", "threat_detection", "audit", "admin", "metrics"}
 _SERVER_KEYS = {
     "listen_host",
     "max_connections",
     "max_connections_per_ip",
+    "max_honeypot_connections",
     "accept_backlog",
     "shutdown_timeout",
     "require_client_allowlist",
@@ -246,6 +333,36 @@ _LISTENER_KEYS = {
     "read_chunk_bytes",
     "send_proxy_v2",
 }
+_HONEYPOT_KEYS = {
+    "name",
+    "listen_host",
+    "listen_port",
+    "template",
+    "backend_host",
+    "backend_port",
+    "backend_connect_timeout",
+    "banner_text",
+    "banner_hex",
+    "rules",
+    "default_reply_text",
+    "default_reply_hex",
+    "close_after_banner",
+    "close_after_reply",
+    "max_exchanges",
+    "allowed_client_networks",
+    "denied_client_networks",
+    "first_byte_timeout",
+    "idle_timeout",
+    "max_connection_seconds",
+    "max_bytes_in",
+    "max_bytes_out",
+    "max_connections_per_ip",
+    "new_connections_per_second",
+    "new_connections_burst",
+    "read_chunk_bytes",
+    "ban_seconds",
+}
+_HONEYPOT_RULE_KEYS = {"expect_text", "expect_hex", "reply_text", "reply_hex"}
 _THREAT_KEYS = {
     "enabled",
     "mode",
@@ -308,10 +425,18 @@ def _parse_server(raw: Any) -> ServerConfig:
     )
     if max_connections_per_ip > max_connections:
         raise ConfigError("server.max_connections_per_ip must not exceed server.max_connections")
+    max_honeypot_connections = _int(
+        data.get("max_honeypot_connections"),
+        "server.max_honeypot_connections",
+        64,
+        minimum=1,
+        maximum=100000,
+    )
     return ServerConfig(
         listen_host=listen_host,
         max_connections=max_connections,
         max_connections_per_ip=max_connections_per_ip,
+        max_honeypot_connections=max_honeypot_connections,
         accept_backlog=_int(data.get("accept_backlog"), "server.accept_backlog", 128, minimum=1, maximum=65535),
         shutdown_timeout=_float(
             data.get("shutdown_timeout"), "server.shutdown_timeout", 30.0, minimum=0.1, maximum=3600.0
@@ -390,6 +515,231 @@ def _parse_listener(raw: Any, server: ServerConfig, index: int) -> ListenerConfi
             data.get("read_chunk_bytes"), f"{where}.read_chunk_bytes", 65536, minimum=512, maximum=1024 * 1024
         ),
         send_proxy_v2=_bool(data.get("send_proxy_v2"), f"{where}.send_proxy_v2", False),
+    )
+
+
+def _binary_field(
+    data: dict[str, Any],
+    text_key: str,
+    hex_key: str,
+    where: str,
+    *,
+    default: bytes | None,
+    max_bytes: int,
+) -> bytes | None:
+    if text_key in data and hex_key in data:
+        raise ConfigError(f"{where} must use only one of {text_key} or {hex_key}")
+    if text_key not in data and hex_key not in data:
+        return default
+    key = text_key if text_key in data else hex_key
+    value = data[key]
+    if not isinstance(value, str):
+        raise ConfigError(f"{where}.{key} must be a string")
+    try:
+        decoded = value.encode("utf-8") if key == text_key else bytes.fromhex(value)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise ConfigError(f"{where}.{key} is not valid {'text' if key == text_key else 'hex'}") from exc
+    if len(decoded) > max_bytes:
+        raise ConfigError(f"{where}.{key} must be at most {max_bytes} bytes")
+    return decoded
+
+
+def _parse_honeypot_rule(raw: Any, where: str) -> HoneypotRule:
+    data = _mapping(raw, where)
+    _check_keys(data, _HONEYPOT_RULE_KEYS, where)
+    expect = _binary_field(
+        data,
+        "expect_text",
+        "expect_hex",
+        where,
+        default=None,
+        max_bytes=4096,
+    )
+    reply = _binary_field(
+        data,
+        "reply_text",
+        "reply_hex",
+        where,
+        default=None,
+        max_bytes=16384,
+    )
+    if not expect:
+        raise ConfigError(f"{where} must define a non-empty expect_text or expect_hex")
+    if reply is None:
+        raise ConfigError(f"{where} must define reply_text or reply_hex")
+    return HoneypotRule(expect=expect, reply=reply)
+
+
+def _parse_honeypot(raw: Any, server: ServerConfig, index: int) -> HoneypotConfig:
+    where = f"honeypots[{index}]"
+    data = _mapping(raw, where)
+    _check_keys(data, _HONEYPOT_KEYS, where)
+    name = _string(data.get("name"), f"{where}.name", max_length=64)
+    listen_host = _string(data.get("listen_host", server.listen_host), f"{where}.listen_host")
+    listen_port = _int(data.get("listen_port"), f"{where}.listen_port", 0, minimum=1, maximum=65535)
+    template_name = _string(data.get("template", "custom"), f"{where}.template", max_length=64).casefold()
+    if template_name == "custom":
+        template: TcpHoneypotTemplate | None = None
+    else:
+        template = HONEYPOT_TEMPLATES.get(template_name)
+        if template is None:
+            names = ", ".join(sorted(HONEYPOT_TEMPLATES))
+            raise ConfigError(f"{where}.template must be custom or one of: {names}")
+
+    backend_host_raw = data.get("backend_host")
+    backend_port_raw = data.get("backend_port")
+    if (backend_host_raw is None) != (backend_port_raw is None):
+        raise ConfigError(f"{where}.backend_host and {where}.backend_port must be set together")
+    if backend_host_raw is None:
+        backend_host = None
+        backend_port = None
+        backend_connect_timeout = 2.0
+    else:
+        backend_host = _isolated_backend_host(backend_host_raw, f"{where}.backend_host")
+        backend_port = _int(
+            backend_port_raw,
+            f"{where}.backend_port",
+            0,
+            minimum=1,
+            maximum=65535,
+        )
+        if _same_endpoint(backend_host, backend_port, listen_host, listen_port):
+            raise ConfigError(f"{where} backend must not point back to its own listener")
+        backend_connect_timeout = _float(
+            data.get("backend_connect_timeout"),
+            f"{where}.backend_connect_timeout",
+            2.0,
+            minimum=0.1,
+            maximum=60.0,
+        )
+
+    banner = _binary_field(
+        data,
+        "banner_text",
+        "banner_hex",
+        where,
+        default=template.banner if template is not None else b"",
+        max_bytes=16384,
+    )
+    assert banner is not None
+    default_reply = _binary_field(
+        data,
+        "default_reply_text",
+        "default_reply_hex",
+        where,
+        default=template.default_reply if template is not None else b"",
+        max_bytes=16384,
+    )
+    assert default_reply is not None
+
+    if "rules" in data:
+        rules_raw = data["rules"]
+        if not isinstance(rules_raw, list):
+            raise ConfigError(f"{where}.rules must be an array")
+        if len(rules_raw) > 64:
+            raise ConfigError(f"{where}.rules must contain at most 64 entries")
+        rules = tuple(
+            _parse_honeypot_rule(item, f"{where}.rules[{rule_index}]")
+            for rule_index, item in enumerate(rules_raw)
+        )
+    else:
+        rules = template.rules if template is not None else ()
+
+    close_after_banner = _bool(
+        data.get("close_after_banner"),
+        f"{where}.close_after_banner",
+        template.close_after_banner if template is not None else False,
+    )
+    close_after_reply = _bool(
+        data.get("close_after_reply"),
+        f"{where}.close_after_reply",
+        template.close_after_reply if template is not None else True,
+    )
+    max_exchanges = _int(
+        data.get("max_exchanges"),
+        f"{where}.max_exchanges",
+        template.max_exchanges if template is not None else 1,
+        minimum=0,
+        maximum=1000,
+    )
+    if backend_host is None and not banner and not rules and not default_reply:
+        raise ConfigError(f"{where} must provide a banner, rules, or default reply")
+
+    max_connections_per_ip = _int(
+        data.get("max_connections_per_ip"),
+        f"{where}.max_connections_per_ip",
+        min(server.max_connections_per_ip, server.max_honeypot_connections),
+        minimum=1,
+        maximum=100000,
+    )
+    if max_connections_per_ip > server.max_honeypot_connections:
+        raise ConfigError(
+            f"{where}.max_connections_per_ip must not exceed server.max_honeypot_connections"
+        )
+    return HoneypotConfig(
+        name=name,
+        listen_host=listen_host,
+        listen_port=listen_port,
+        template=template_name,
+        backend_host=backend_host,
+        backend_port=backend_port,
+        backend_connect_timeout=backend_connect_timeout,
+        banner=banner,
+        rules=rules,
+        default_reply=default_reply,
+        close_after_banner=close_after_banner,
+        close_after_reply=close_after_reply,
+        max_exchanges=max_exchanges,
+        allowed_client_networks=_networks(
+            data.get("allowed_client_networks"), f"{where}.allowed_client_networks"
+        ),
+        denied_client_networks=_networks(
+            data.get("denied_client_networks"), f"{where}.denied_client_networks"
+        ),
+        first_byte_timeout=_float(
+            data.get("first_byte_timeout"),
+            f"{where}.first_byte_timeout",
+            10.0,
+            minimum=0.1,
+            maximum=3600.0,
+        ),
+        idle_timeout=_float(
+            data.get("idle_timeout"), f"{where}.idle_timeout", 30.0, minimum=0.1, maximum=86400.0
+        ),
+        max_connection_seconds=_float(
+            data.get("max_connection_seconds"),
+            f"{where}.max_connection_seconds",
+            120.0,
+            minimum=1.0,
+            maximum=86400.0,
+        ),
+        max_bytes_in=_int(
+            data.get("max_bytes_in"), f"{where}.max_bytes_in", 65536, minimum=1, maximum=1024 * 1024 * 1024
+        ),
+        max_bytes_out=_int(
+            data.get("max_bytes_out"), f"{where}.max_bytes_out", 65536, minimum=1, maximum=1024 * 1024 * 1024
+        ),
+        max_connections_per_ip=max_connections_per_ip,
+        new_connections_per_second=_float(
+            data.get("new_connections_per_second"),
+            f"{where}.new_connections_per_second",
+            10.0,
+            minimum=0.01,
+            maximum=1000000.0,
+        ),
+        new_connections_burst=_int(
+            data.get("new_connections_burst"),
+            f"{where}.new_connections_burst",
+            20,
+            minimum=1,
+            maximum=1000000,
+        ),
+        read_chunk_bytes=_int(
+            data.get("read_chunk_bytes"), f"{where}.read_chunk_bytes", 4096, minimum=1, maximum=1024 * 1024
+        ),
+        ban_seconds=_float(
+            data.get("ban_seconds"), f"{where}.ban_seconds", 0.0, minimum=0.0, maximum=31536000.0
+        ),
     )
 
 
@@ -626,6 +976,13 @@ def parse_config(raw: Any) -> GatewayConfig:
     if len(listeners_raw) > 256:
         raise ConfigError("listeners must contain at most 256 entries")
     listeners = tuple(_parse_listener(item, server, index) for index, item in enumerate(listeners_raw))
+    honeypots_raw = data.get("honeypots", [])
+    if not isinstance(honeypots_raw, list):
+        raise ConfigError("honeypots must be an array")
+    if len(honeypots_raw) > 128:
+        raise ConfigError("honeypots must contain at most 128 entries")
+    honeypots = tuple(_parse_honeypot(item, server, index) for index, item in enumerate(honeypots_raw))
+    admin = _parse_admin(data.get("admin", {}))
     names: set[str] = set()
     ports: set[int] = set()
     for listener in listeners:
@@ -635,15 +992,64 @@ def parse_config(raw: Any) -> GatewayConfig:
             raise ConfigError(f"duplicate listen_port: {listener.listen_port}")
         names.add(listener.name)
         ports.add(listener.listen_port)
+    ports.add(admin.listen_port)
+    for honeypot in honeypots:
+        if honeypot.name in names:
+            raise ConfigError(f"duplicate listener or honeypot name: {honeypot.name}")
+        if honeypot.listen_port in ports:
+            raise ConfigError(f"duplicate listen_port: {honeypot.listen_port}")
+        names.add(honeypot.name)
+        ports.add(honeypot.listen_port)
+        if honeypot.backend_host is not None:
+            assert honeypot.backend_port is not None
+            for listener in listeners:
+                if _same_endpoint(
+                    honeypot.backend_host,
+                    honeypot.backend_port,
+                    listener.upstream_host,
+                    listener.upstream_port,
+                ):
+                    raise ConfigError(
+                        f"{honeypot.name} backend must not reuse a business upstream"
+                    )
+                if _same_endpoint(
+                    honeypot.backend_host,
+                    honeypot.backend_port,
+                    server.listen_host,
+                    listener.listen_port,
+                ):
+                    raise ConfigError(
+                        f"{honeypot.name} backend must not reuse a business listener"
+                    )
+            for other in honeypots:
+                if other is not honeypot and _same_endpoint(
+                    honeypot.backend_host,
+                    honeypot.backend_port,
+                    other.listen_host,
+                    other.listen_port,
+                ):
+                    raise ConfigError(
+                        f"{honeypot.name} backend must not point to another honeypot listener"
+                    )
+            if _same_endpoint(
+                honeypot.backend_host,
+                honeypot.backend_port,
+                admin.listen_host,
+                admin.listen_port,
+            ):
+                raise ConfigError(
+                    f"{honeypot.name} backend must not point to the admin listener"
+                )
     metrics_raw = _mapping(data.get("metrics", {}), "metrics")
     _check_keys(metrics_raw, _METRICS_KEYS, "metrics")
     return GatewayConfig(
         version=version,
         server=server,
         listeners=listeners,
+        honeypots=honeypots,
         threat=_parse_threat(data.get("threat_detection", {})),
         audit=_parse_audit(data.get("audit", {})),
-        admin=_parse_admin(data.get("admin", {})),
+        admin=admin,
         metrics_enabled=_bool(metrics_raw.get("enabled"), "metrics.enabled", True),
     )
 
@@ -685,6 +1091,7 @@ def config_to_dict(config: GatewayConfig) -> dict[str, Any]:
             "listen_host": config.server.listen_host,
             "max_connections": config.server.max_connections,
             "max_connections_per_ip": config.server.max_connections_per_ip,
+            "max_honeypot_connections": config.server.max_honeypot_connections,
             "accept_backlog": config.server.accept_backlog,
             "shutdown_timeout": config.server.shutdown_timeout,
             "require_client_allowlist": config.server.require_client_allowlist,
@@ -709,6 +1116,41 @@ def config_to_dict(config: GatewayConfig) -> dict[str, Any]:
                 "send_proxy_v2": listener.send_proxy_v2,
             }
             for listener in config.listeners
+        ],
+        "honeypots": [
+            {
+                "name": honeypot.name,
+                "listen_host": honeypot.listen_host,
+                "listen_port": honeypot.listen_port,
+                "template": honeypot.template,
+                "mode": "backend" if honeypot.backend_host is not None else "static",
+                "backend_host": honeypot.backend_host,
+                "backend_port": honeypot.backend_port,
+                "backend_connect_timeout": honeypot.backend_connect_timeout,
+                "banner_bytes": len(honeypot.banner),
+                "rules_count": len(honeypot.rules),
+                "default_reply_bytes": len(honeypot.default_reply),
+                "close_after_banner": honeypot.close_after_banner,
+                "close_after_reply": honeypot.close_after_reply,
+                "max_exchanges": honeypot.max_exchanges,
+                "allowed_client_networks": [
+                    str(network) for network in honeypot.allowed_client_networks
+                ],
+                "denied_client_networks": [
+                    str(network) for network in honeypot.denied_client_networks
+                ],
+                "first_byte_timeout": honeypot.first_byte_timeout,
+                "idle_timeout": honeypot.idle_timeout,
+                "max_connection_seconds": honeypot.max_connection_seconds,
+                "max_bytes_in": honeypot.max_bytes_in,
+                "max_bytes_out": honeypot.max_bytes_out,
+                "max_connections_per_ip": honeypot.max_connections_per_ip,
+                "new_connections_per_second": honeypot.new_connections_per_second,
+                "new_connections_burst": honeypot.new_connections_burst,
+                "read_chunk_bytes": honeypot.read_chunk_bytes,
+                "ban_seconds": honeypot.ban_seconds,
+            }
+            for honeypot in config.honeypots
         ],
         "threat_detection": {
             "enabled": config.threat.enabled,
@@ -798,11 +1240,31 @@ def example_config() -> dict[str, Any]:
             "listen_host": "127.0.0.1",
             "max_connections": 512,
             "max_connections_per_ip": 32,
+            "max_honeypot_connections": 64,
             "accept_backlog": 128,
             "shutdown_timeout": 30.0,
             "require_client_allowlist": False,
         },
         "listeners": [listener, api],
+        "honeypots": [
+            {
+                "name": "ssh-decoy",
+                "listen_port": 18092,
+                "template": "ssh",
+                "ban_seconds": 0,
+            },
+            {
+                "name": "custom-decoy",
+                "listen_port": 18093,
+                "template": "custom",
+                "banner_text": "220 decoy SMTP ready\r\n",
+                "rules": [
+                    {"expect_text": "HELO", "reply_text": "250 decoy.internal.invalid\r\n"},
+                ],
+                "default_reply_text": "500 Unknown command\r\n",
+                "ban_seconds": 0,
+            },
+        ],
         "threat_detection": {
             "enabled": True,
             "mode": "score",

@@ -8,6 +8,7 @@ import logging
 import signal
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, cast
 
@@ -148,29 +149,51 @@ def _serve(config: Config, config_path: Path) -> int:
     runtime = Runtime.build(config)
     tls_context = build_tls_context(config)
     gateway: GatewayServer | None = None
+    honeypot_gateways: list[GatewayServer] = []
     admin = None
     try:
         gateway = GatewayServer((config.server.listen_host, config.server.listen_port), runtime, tls_context)
-        controller = ServerController(config_path, gateway)
+        for listener in config.policy.honeypot.listeners:
+            honeypot_gateways.append(
+                GatewayServer(
+                    (listener.listen_host, listener.listen_port),
+                    runtime,
+                    tls_context,
+                    honeypot_only=True,
+                    honeypot_backend=listener.backend,
+                    owns_runtime=False,
+                )
+            )
+        controller = ServerController(config_path, gateway, honeypot_gateways)
         admin = build_admin_server(runtime, reload_callback=controller.reload)
         if admin is not None:
             controller.attach_admin(admin)
     except OSError as exc:
-        if gateway is not None:
-            gateway.server_close()
+        for server in ([gateway] if gateway is not None else []) + honeypot_gateways:
+            server.server_close()
         runtime.close()
         _LOG.error("listener bind failed (%s)", type(exc).__name__)
         return 1
     except Exception as exc:
-        if gateway is not None:
-            gateway.server_close()
+        for server in ([gateway] if gateway is not None else []) + honeypot_gateways:
+            server.server_close()
         runtime.close()
         _LOG.error("startup failed (%s)", type(exc).__name__)
         return 1
 
+    assert gateway is not None
+    all_gateways = [gateway, *honeypot_gateways]
     stop = threading.Event()
     reload_event = threading.Event()
     gateway_thread = threading.Thread(target=gateway.serve_forever, name="highwall-proxy", kwargs={"poll_interval": 0.2})
+    honeypot_threads = [
+        threading.Thread(
+            target=server.serve_forever,
+            name=f"highwall-honeypot-{listener.name}",
+            kwargs={"poll_interval": 0.2},
+        )
+        for listener, server in zip(config.policy.honeypot.listeners, honeypot_gateways)
+    ]
     admin_thread = None
     if admin is not None:
         admin_thread = threading.Thread(target=admin.serve_forever, name="highwall-admin", kwargs={"poll_interval": 0.2})
@@ -207,6 +230,17 @@ def _serve(config: Config, config_path: Path) -> int:
         config.upstream.host,
         config.upstream.port,
     )
+    for listener, server in zip(config.policy.honeypot.listeners, honeypot_gateways):
+        if listener.backend is None:
+            backend_target = "static decoys only"
+        else:
+            backend_target = f"live backend http://{listener.backend.host}:{listener.backend.port}"
+        _LOG.info(
+            "honeypot-only listener %s on %s (%s)",
+            listener.name,
+            _endpoint(proxy_scheme, listener.listen_host, server.server_address[1]),
+            backend_target,
+        )
     if admin is not None:
         _LOG.info(
             "management endpoint on %s (loopback only)",
@@ -217,6 +251,8 @@ def _serve(config: Config, config_path: Path) -> int:
             ),
         )
     gateway_thread.start()
+    for thread in honeypot_threads:
+        thread.start()
     if admin_thread is not None:
         admin_thread.start()
 
@@ -227,30 +263,44 @@ def _serve(config: Config, config_path: Path) -> int:
                 result = controller.reload()
                 if result.status != "reloaded":
                     _LOG.error("configuration reload rejected: %s", result.error)
-            if not gateway_thread.is_alive() or (admin_thread is not None and not admin_thread.is_alive()):
+            server_threads = [gateway_thread, *honeypot_threads]
+            if any(not thread.is_alive() for thread in server_threads) or (
+                admin_thread is not None and not admin_thread.is_alive()
+            ):
                 _LOG.error("a server thread stopped unexpectedly")
                 break
     except KeyboardInterrupt:
         stop.set()
     finally:
-        gateway.begin_drain()
+        for server in all_gateways:
+            server.begin_drain()
         if admin is not None:
             try:
                 admin.shutdown()
             except Exception:
                 pass
             admin.server_close()
-        try:
-            gateway.shutdown()
-        except Exception:
-            pass
-        gateway.server_close()
-        drain_timeout = gateway.runtime.config.server.shutdown_timeout
-        if not gateway.wait_for_drain(drain_timeout):
+        for server in all_gateways:
+            try:
+                server.shutdown()
+            except Exception:
+                pass
+            server.server_close()
+        drain_timeout = config.server.shutdown_timeout
+        deadline = time.monotonic() + drain_timeout
+        drained = True
+        for server in all_gateways:
+            remaining = max(0.0, deadline - time.monotonic())
+            if not server.wait_for_drain(remaining):
+                drained = False
+        if not drained:
             _LOG.warning("shutdown drain timed out; closing active connections")
-            gateway.abort_connections()
-            gateway.wait_for_drain(1.0)
+            for server in all_gateways:
+                server.abort_connections()
+                server.wait_for_drain(1.0)
         gateway_thread.join(timeout=5.0)
+        for thread in honeypot_threads:
+            thread.join(timeout=5.0)
         if admin_thread is not None:
             admin_thread.join(timeout=5.0)
         gateway.close_all_runtimes()

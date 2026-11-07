@@ -16,17 +16,17 @@ python verify.py
 ## 网络与端口
 
 - 边缘：宿主 `8080`（HTTPS 配置为 `8443`）。
-- HighWall：边缘网 `172.30.0.20:18090`，上游网 `172.31.0.20`；不发布到宿主机。
-- 上游：`172.31.0.30:18080`，位于 `internal` 网络，不发布到宿主机，也不能主动访问外网。
+- HighWall：边缘网 `172.40.0.20:18090`，上游网 `172.41.0.20`；不发布到宿主机。
+- 上游：`172.41.0.30:18080`，位于 `internal` 网络，不发布到宿主机，也不能主动访问外网。
 - HAProxy 管理 socket：容器内 `/var/run/haproxy/admin.sock`。
 
 不要给 HighWall 或上游增加 `ports` 映射。需要从宿主机排障时，用 `docker compose exec` 或临时 SSH 隧道，不要长期发布。
 
 ## 真实客户端 IP
 
-`haproxy/haproxy.cfg` 会删除客户端提交的 `X-Forwarded-For`、`Forwarded`、`X-Real-IP`，再写入唯一的可信 XFF。HighWall 的 `trusted_proxies` 只允许 `172.30.0.10/32`。
+`haproxy/haproxy.cfg` 会删除客户端提交的 `X-Forwarded-For`、`Forwarded`、`X-Real-IP`，再写入唯一的可信 XFF。HighWall 的 `trusted_proxies` 只允许 `172.40.0.10/32`。
 
-`policy.allowed_client_networks` 检查的是解析后的客户端 IP，不是 HAProxy 地址。示例留空，依赖“HighWall 只被 HAProxy 访问”的网络闭环；生产应按真实客户端网段填写，不要填 `172.30.0.10/32`。
+`policy.allowed_client_networks` 检查的是解析后的客户端 IP，不是 HAProxy 地址。示例留空，依赖“HighWall 只被 HAProxy 访问”的网络闭环；生产应按真实客户端网段填写，不要填 `172.40.0.10/32`。
 
 ## TLS
 
@@ -49,9 +49,9 @@ python verify.py
 
 - 正常请求经边缘到达上游；
 - 伪造 `X-Forwarded-For` 被替换；
-- 宿主机上的 HighWall/上游端口不可达。
+- Compose 中 HighWall/上游没有发布宿主机端口。
 
-如果本机没有 Docker daemon，脚本会失败并提示先启动容器；不要用 `--skip-direct` 掩盖旁路问题。
+如果本机没有 Docker daemon，脚本会失败并提示先启动容器；不要用 `--skip-direct` 掩盖旁路问题。脚本按 Compose 服务查询容器端口绑定，不会把同一宿主机上其他栈占用的同号端口误判为标准栈泄漏；启动瞬间的 502/503/504 会做有限重试，持续故障仍会失败。
 
 ## 故障排查
 

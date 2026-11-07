@@ -6,7 +6,7 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP 应用层反向代理与防护网关**。它保留零第三方依赖的 Python HTTP/1.1 基线，同时提供 Rust 原生 B+D-4 数据面，目标是让应用入口的解析、策略、资源限制和审计可验证、可回归。
 
-当前源码：`0.12.0`（`v0.12.0` Alpha 预发布）；最新稳定版：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查；v0.12 进入护栏阶段，加入精确 IP 执法键、Safe Ops 只读预演、运行时能力清单、独立 L5Wall 子项目、L4Wall PROXY v2 真实来源链和原生 B+D-4 数据面。原生核心已覆盖 TLS/QUIC、H1/H2/H3、H1 WebSocket、H2/H3 gRPC、有界正文 WAF/DLP 和 QUIC 来源 ACL，H1/H2/H3 按 C3 声明，C4 仍有未覆盖项。DSH 已完成首轮、r5 与 r6 定向独立复测：0 Critical、0 High；r5 的 8 个定向项中 7 项关闭，HWA-11 随后在 r6 窄范围复测中关闭；维护者 r7 又对 HWA-04/05/06 做了可重复定向回归。完整生产准入尚未完成，因此它仍不是已经完成第三方审计或生产准入的产品。
+当前源码：`0.13.0.dev0`（开发构建）；最新预发布：`0.12.0` Alpha；最新稳定版：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查；v0.12 进入护栏阶段，加入精确 IP 执法键、Safe Ops 只读预演、运行时能力清单、独立 L5Wall 子项目、L4Wall PROXY v2 真实来源链和原生 B+D-4 数据面。原生核心已覆盖 TLS/QUIC、H1/H2/H3、H1 WebSocket、H2/H3 gRPC、有界正文 WAF/DLP 和 QUIC 来源 ACL，H1/H2/H3 按 C3 声明，C4 仍有未覆盖项。DSH 已完成首轮、r5 与 r6 定向独立复测：0 Critical、0 High；r5 的 8 个定向项中 7 项关闭，HWA-11 随后在 r6 窄范围复测中关闭；维护者 r7 又对 HWA-04/05/06 做了可重复定向回归。完整生产准入尚未完成，因此它仍不是已经完成第三方审计或生产准入的产品。
 
 > **v0.12 重点**：L4Wall 继续负责 TCP 连接准入、限速、字节上限和封禁；Python HighWall 保留 H1 基线和策略工具；Rust 原生 B+D-4 数据面负责 TLS/QUIC、H1/H2/H3 和有界正文检查。上线前先用 [docs/STACK.md](docs/STACK.md) 核对入口、直连封堵、真实客户端 IP 和 TCP/UDP 分叉。
 
@@ -105,7 +105,7 @@ python -m highwall serve -c config.json
 - 可对 HTTP/TLS 形状做多信号指纹；执法封禁键绑定精确客户端地址与稳定形状，`/24`、`/64` 只用于关联分析，不直接扩大封禁范围。疑似阶段先限速，确认后写入有界持久标记，并对慢速通道施加 5 分钟疑似窗口或 15 分钟确认窗口。
 - 可聚合 L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误，触发 DDoS 告警并异步推送 Webhook；支持恢复事件和 5 分钟响应窗口。
 - 可按最长路径前缀配置路由策略：方法子集、只读、路由级来源 CIDR、请求体上限、独立并发槽位和每客户端令牌桶限速。
-- 可配置精确路径蜜罐：内置常见扫描路径模板，返回本地静态诱饵，绝不访问上游；命中后记录独立审计事件，并可立即封禁来源或施加有上限的短延迟。
+- 可配置精确路径蜜罐：内置 34 个扫描路径模板，默认返回本地静态诱饵；可增加多个独立蜜罐端口，并把未命中静态路径的流量接到隔离 HTTP 高交互后端。命中记录独立审计，并可立即封禁来源或施加有上限的短延迟。
 - 支持全局或路由级 `read_only`：写方法在到达上游前被拒绝，适合静态站、备份浏览和管理读写分离。
 - 可对精确 `GET` 路径做响应完整性钉扎：校验状态码和响应体 SHA-256；`detect` 记录，`block` 返回 502 且不转发被替换的内容。
 - 可启用上游熔断：连续连接失败、超时或 5xx 后短暂拒绝请求，冷却后用有界半开探针验证恢复，避免故障放大。
@@ -258,7 +258,7 @@ $env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
 
 ## 自定义蜜罐
 
-蜜罐是显式配置的**精确路径诱饵**。请求只有在通过来源 ACL 和 Host 白名单后，才会按规范化路径匹配；命中后由 HighWall 直接返回静态内容，不连接上游。为避免扫描器因普通 WAF/方法规则提前收到 403，蜜罐路径不套用普通 `allowed_methods`、Content-Type、Origin、只读和 WAF 约束。
+蜜罐是显式配置的**精确路径诱饵**。请求只有在通过来源 ACL 和 Host 白名单后，才会按规范化路径匹配；默认命中由 HighWall 直接返回静态内容，不连接上游。为避免扫描器因普通 WAF/方法规则提前收到 403，蜜罐路径不套用普通 `allowed_methods`、Content-Type、Origin、只读和 WAF 约束。
 
 ```json
 {
@@ -268,10 +268,16 @@ $env:HIGHWALL_ALERT_TOKEN = "<16+ random characters>"
 }
 ```
 
+需要把蜜罐移出主业务端口时，可用 `listeners` 增加独立端口。某个端口配置
+`backend` 后，静态诱饵仍优先；未命中静态路径才转发到专用 HTTP 后端，失败时
+只返回 502/504，绝不回落业务上游。高交互后端必须位于回环/私网，且不能是
+业务上游、主代理、管理面、自身或其他蜜罐端口。隔离部署和完整仿真成本见
+[`deploy/honeypot/README.md`](deploy/honeypot/README.md)。
+
 安全约束：
 
 - 只按规范化后的完整路径精确匹配，不做前缀或通配符匹配；查询串不参与匹配。
-- `presets` 可直接启用内置组：`common`、`secrets`、`wordpress`、`spring`、`admin`、`devops`、`cloud`，也可列出单个模板名；显式 `routes` 会按路径覆盖预设。
+- `presets` 可直接启用内置组：`common`、`secrets`、`wordpress`、`spring`、`admin`、`devops`、`cloud`、`build`、`infra`、`observability` 或 `expanded`/`all`，也可列出单个模板名；显式 `routes` 会按路径覆盖预设。
 - 响应体必须写在配置内且不超过 64 KiB；只允许安全自定义响应头，限制 `Content-Type`、`Content-Length`、`Set-Cookie`、`Server` 等托管头。
 - 不反射 URL、Header 或请求体，不记录请求体、Header、Cookie、Authorization 或查询串；审计只记录方法、路径、来源、状态和规则 ID。
 - `ban_seconds` 大于 0 时，第一次命中即封禁该来源；封禁状态只保存在内存中。共享 NAT 出口可能被连带封禁，可通过设为 `0` 关闭。
@@ -293,7 +299,7 @@ HighWall 是 L7 网关，不是“绝对高防”：
 - **不能替代主机防火墙或网络分段**：客户端 CIDR ACL 只处理已经到达 HighWall 的 HTTP 请求，不处理 DNS 隧道、RPC、原始套接字或其他非 HTTP 流量。
 - `read_only` 只按 HTTP 方法阻断 `POST`/`PUT`/`PATCH`/`DELETE`，无法识别通过 `GET` 触发副作用的错误业务设计。
 - 完整性钉扎只覆盖配置中精确匹配的静态 `GET` 路径和状态码；查询串不参与匹配，也不会因为加了 query 就绕过校验。它不覆盖 HEAD、动态页面、响应头、WebSocket 或流式响应。
-- 蜜罐只覆盖显式配置的精确路径，不能发现所有扫描；它可能被指纹识别，误触封禁会影响共享 NAT 来源，也不提供高交互 shell、文件落盘或反制能力。
+- 默认蜜罐只覆盖显式配置的精确路径，不能发现所有扫描；它可能被指纹识别，误触封禁会影响共享 NAT 来源。可选高交互后端是独立部署的可被攻陷资产，不是完整业务仿真，也不提供反制能力；网关本身不执行不可信内容。
 - 熔断器会在上游连续故障时主动返回 503；它是故障隔离，不是 DDoS 清洗或容量保证。
 - 持久标记可能因共享 NAT、代理池或刻意模仿正常浏览器而产生误报；默认先 `monitor`，并保护 `offenders.json` 不被未授权修改或删除。
 - **不代理** WebSocket、HTTP/2、双向流式响应；检测到 Upgrade 会拒绝。响应会缓冲到 `max_response_bytes`。
@@ -314,15 +320,17 @@ HighWall 仓库包含独立的 L4 子项目 [L4Wall](subprojects/l4wall/README.m
 
 上线前必须读 [docs/STACK.md](docs/STACK.md)，重点确认：HighWall 和上游没有公网端口、L4Wall 管理面只回环、客户端转发头会被边缘删除并重写、直连 HighWall/上游在攻击者视角下不可达。L4Wall 已实现可选的 Redis 共享封禁读取端；自动发布端、Controller 和多节点 HA 仍在后续里程碑，不能把标准骨架当成完整控制面。
 
+L4Wall `0.1.0` 已作为独立 Release 发布：[l4wall-v0.1.0](https://github.com/Fallen-leaves089/highwall/releases/tag/l4wall-v0.1.0)。该版本原样复用 `v0.11.0` 的历史构建，wheel、sdist 和 L4Wall 专用 `SHA256SUMS` 由该独立 Release 的 Assets 提供；`v0.11.0` 页仅保留兼容旧链接的副本。不随 `v0.12.0` 打包，也没有 GHCR 镜像、PyPI 包或其他下载渠道。当前 `main` 上后续加入的 PROXY v2 等 L4Wall 改动不在这个 `0.1.0` 包中，完整说明见 [L4Wall 发布说明](subprojects/l4wall/docs/RELEASE-NOTES.md)。
+
 ## L5/H2/H3 与原生 B+D-4
 
-原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前版本 `0.12.0`。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。
+原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前源码版本 `0.13.0-dev0`（最近发布资产为 `0.12.0`）。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。
 
-当前 H1/H2/H3 按 C3 声明，C4 尚未声明：标准 JA3/JA4、真实 WebSocket 端到端、QPACK 阻塞、流式背压饱和和部分 slow-flow 攻击仍属未覆盖项。精确 IP 封禁、Safe Ops 只读预演和独立 L5Wall `0.2.0` 也已落地；L5Wall 仍为 C1，提供 TLS 终止、会话策略和有界 H1 回环桥接。Safe Ops 还没有执行器，R2/R3 保持默认拒绝。
+当前 H1/H2/H3 按 C3 声明，C4 尚未声明：标准 JA3/JA4、真实 WebSocket 端到端、QPACK 阻塞、流式背压饱和和部分 slow-flow 攻击仍属未覆盖项。精确 IP 封禁、Safe Ops 只读预演和独立 L5Wall `0.2.1` 也已落地；L5Wall 仍为 C1，提供 TLS 终止、会话策略、有界 H1 回环桥接、瞬时监听错误退避和有界优雅排空。Safe Ops 还没有执行器，R2/R3 保持默认拒绝。
 
 能力是否成立以 C0-C4 等级和测试门槛为准，不能把协议透传当作完整检查。启用 HAProxy/Envoy 终止 TLS 时，必须明确它是否导致真实客户端 JA3/JA4 丢失。
 
-L5 已按 L4Wall 的方式独立为 [`subprojects/l5wall`](subprojects/l5wall/README.md)，当前版本 `0.2.0`、覆盖等级 C1，拥有独立测试、配置检查、回环 `serve` 桥接、威胁模型和独立发布流；wheel/sdist、`SHA256SUMS` 与 GHCR 镜像见 [L5Wall 发布说明](subprojects/l5wall/docs/RELEASE-NOTES.md)，部署边界见 [部署文档](subprojects/l5wall/docs/DEPLOYMENT.md)。原生核心内另有一套共享策略目标的 L5/L7 实现，L5Wall 子项目继续独立演进，不被它替代。
+L5 已按 L4Wall 的方式独立为 [`subprojects/l5wall`](subprojects/l5wall/README.md)，当前版本 `0.2.1`、覆盖等级 C1，拥有独立测试、配置检查、回环 `serve` 桥接、威胁模型和独立发布流；该版本修复了连接抖动触发监听器退出的问题，并为 `SIGTERM` 增加有界排空。`l5wall-v0.2.1` 已于 2026-11-03 单独发布，wheel/sdist、`SHA256SUMS` 与 GHCR 镜像见 [L5Wall 发布说明](subprojects/l5wall/docs/RELEASE-NOTES.md)，部署边界见 [部署文档](subprojects/l5wall/docs/DEPLOYMENT.md)。原生核心内另有一套共享策略目标的 L5/L7 实现，L5Wall 子项目继续独立演进，不被它替代。
 
 DSH 子系统 AI Agent 已完成首轮独立验收：0 Critical、0 High、3 Medium、8 Low、3 信息项。r2/r3、r5 和 r6 定向复测随后完成；r5 的 8 个指定项中 7 项定向关闭（HWA-01/02/03/07/08/09/10），HWA-11 随后在 r6 窄范围独立复测中关闭，线路级 400 + 270、失败回退、上游零命中和审计不泄漏均通过；HWA-04/05/06 本轮未复测。运行进程映像仍无独立取证，H3/UDP 仍绕过 L4Wall，完整生产准入未完成。证据、逐项边界和残余风险见 [docs/DSH-R6-RESULTS-20261101.md](docs/DSH-R6-RESULTS-20261101.md)、[docs/DSH-R5-RESULTS-20261101.md](docs/DSH-R5-RESULTS-20261101.md) 与 [docs/DSH-REMEDIATION-20261101.md](docs/DSH-REMEDIATION-20261101.md)；完整验收范围见 [docs/DSH-SECURITY-ACCEPTANCE.md](docs/DSH-SECURITY-ACCEPTANCE.md)。r5/r6 可以支持人工发布评审，但不等于生产准入，DSH 对生产发布仍建议 no push；本次公开源码和脱敏测试记录已获单独授权。
 
@@ -494,7 +502,7 @@ docker run --rm highwall-native-core:dev --version
 - `policy.allowed_origins`：可选的规范 Origin 白名单，例如 `https://app.example.com`。配置后，`POST`/`PUT`/`PATCH`/`DELETE` 必须带允许的 Origin，跨站写请求会被拒绝；为空时保持原来的非浏览器兼容行为。浏览器跨域写请求会先发 `OPTIONS` 预检，启用该白名单时要把 `OPTIONS` 加入 `allowed_methods`，并确认上游能响应预检。
 - `policy.read_only`：全局只读开关；`routes[].read_only` 只对命中的最长路径前缀生效。它不识别 GET 副作用。
 - `policy.routes`：按最长路径前缀选择；可设置 `methods`、`read_only`、`max_body_bytes`、`max_concurrent`、`rate`、`rate_burst` 和 `allowed_client_networks`。路由方法必须是全局 `allowed_methods` 的子集，空路由来源列表会被拒绝而不是静默放行；`rate` 是每客户端每秒令牌数，`rate_burst` 省略时取速率向上取整。
-- `policy.honeypot`：默认关闭；启用后按规范化后的精确路径拦截诱饵，支持内置 `presets` 或自定义 `routes`、静态状态码、Content-Type、Body、受限响应头、服务端标识、首击封禁和 0–5000 ms 拖延。命中不访问上游，并绕过普通方法/Content-Type/WAF/只读限制以保留诱捕效果；Host 和客户端 ACL 仍然优先。
+- `policy.honeypot`：默认关闭；启用后按规范化后的精确路径拦截诱饵，支持 34 个内置模板、自定义 `routes`、独立 `listeners`、静态状态码、Content-Type、Body、受限响应头、服务端标识、首击封禁和 0–5000 ms 拖延。静态命中不访问上游；独立端口可选 `backend` 转发到隔离高交互服务，失败不回落业务上游。蜜罐绕过普通方法/Content-Type/WAF/只读限制，但 Host、客户端 ACL 和资源上限仍然优先。
 - `policy.response_integrity_mode` / `integrity_pins`：对规范化后的 `GET` 路由路径（大小写不敏感）校验 `status` 和响应体 SHA-256；支持 `off`、`detect`、`block`。钉扎值必须随受控发布流程更新。
 - `upstream.circuit_breaker`：`failure_threshold`、`window`、`open_seconds` 和 `half_open_max_requests` 控制上游故障隔离；只把超时、连接/协议失败和 5xx 计为失败，4xx 视为上游可达。
 - `server.max_inflight_requests`：全局在途请求上限，`0` 表示关闭；应小于 `max_connections` 才能形成独立背压。
@@ -558,7 +566,7 @@ python -m highwall ops preview --plan plan.json --allow-root D:\HighWall --json
 
 ## 协议覆盖清单
 
-`highwall capabilities --json` 描述 **Python H1 基线**：当前 `http1` 为 C3；`tls` 为 C1；`http2`、`http3`、`websocket`、`grpc` 为 C0。它不代表原生 B+D-4 核心；原生 H1/H2/H3 当前按 C3 声明，L5Wall 子项目 0.2.0 也仍只声明 C1。C0/C1 不等于完整防护，无法在清单中声明的能力按未支持处理。
+`highwall capabilities --json` 描述 **Python H1 基线**：当前 `http1` 为 C3；`tls` 为 C1；`http2`、`http3`、`websocket`、`grpc` 为 C0。它不代表原生 B+D-4 核心；原生 H1/H2/H3 当前按 C3 声明，L5Wall 子项目 0.2.1 也仍只声明 C1。C0/C1 不等于完整防护，无法在清单中声明的能力按未支持处理。
 
 ## 配置热加载与优雅停机
 
@@ -583,7 +591,7 @@ curl.exe -X POST -H "Authorization: Bearer $env:HIGHWALL_ADMIN_TOKEN" http://127
 
 **没有生成攻击者标记。** 只有 `confirmed` 会写入 `offenders.json`；`suspected` 只做限速或告警。检查请求是否达到 `score_threshold`、`confirm_score` 或 `confirm_after_seconds`，并确认 `offender_path` 对服务账户可写。标记是风险关联，不是认证或永久封禁。
 
-**正常用户被限速。** 行为检测和告警会保留来源 `/24`、`/64` 关联，但持久封禁键使用精确客户端地址与稳定形状，不会因为邻居被确认而自动封禁整个前缀。共享 NAT、代理池和监控探针仍可能各自触发限速；先在 `monitor` 模式观察，再调整阈值和槽位。
+**正常用户被限速。** 行为检测和告警会保留来源 `/24`、`/64` 关联，但持久封禁键使用精确客户端地址与稳定形状，不会因为邻居被确认而自动封禁整个前缀。共享 NAT、代理池和监控探针仍可能各自触发限速；先在 `monitor` 模式观察，再调整阈值和槽位。本地回环压测默认所有客户端都是 `127.0.0.1`，如果开启自动封禁或 `agent_mode=block`，压测流量和正常请求会共享同一个封禁桶；应让测试客户端绑定 `127.0.0.2` 等独立来源，或先关闭该处置路径，再比较正常请求。
 
 **为什么 HighWall 不自动处理 DDoS。** 它只做 L7 信号检测和告警；带宽型 L3/L4 DDoS、SYN flood 和清洗必须在 CDN、运营商或清洗中心完成。主机或链路饱和时 HighWall 可能先失联，因此外部心跳监控是必需的。
 
@@ -655,7 +663,7 @@ cd subprojects/l5wall
 python -m unittest discover -s tests -v
 ```
 
-原生核心使用 Rust 工具链独立验证。`cargo test --all-targets --locked` 当前 144 项通过，覆盖真实 TCP/TLS/QUIC/H1/H2/H3 监听器、PROXY v2、Retry、未知 ALPN、0-RTT、连接迁移、WAF/DLP、gRPC/trailers 和资源预算：
+原生核心使用 Rust 工具链独立验证。`cargo test --all-targets --locked` 当前 148 项通过，覆盖真实 TCP/TLS/QUIC/H1/H2/H3 监听器、PROXY v2、Retry、未知 ALPN、0-RTT、连接迁移、WAF/DLP、gRPC/trailers、资源预算和 TCP 重连风暴：
 
 ```powershell
 cd subprojects/native-core
@@ -671,6 +679,8 @@ cargo build --release --locked
 $env:HIGHWALL_RUN_NATIVE_CHAIN='1'
 python -m unittest tests.test_native_chain -v
 ```
+
+没有 Rust 工具链时，可从 Release 下载并校验 `highwall-native-core-*` 预编译二进制，然后把 `HIGHWALL_NATIVE_CORE_BIN` 指向它，运行同一条串联测试；这可以验证 L4Wall→原生 H1 的真实进程链，但不能替代 H2/H3/gRPC 的 Rust 源码测试，后者仍需 `cargo test` 或 CI 完成。分支上的原生改动必须重新构建二进制，不能把旧 Release 资产当作新代码的验证结果。
 
 跨层回环攻防验收位于 `tests/test_attack_defense.py`：真实 TCP 串联 L4Wall、HighWall 和模拟上游，覆盖 L4 封禁/限速/超时、共享封禁故障隔离、L7 Host/走私/穿越/WAF/DLP/CSRF/XFF，以及直连 HighWall/上游的绕过边界。完整矩阵、实测结果和未验证项见 [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md)。
 

@@ -141,6 +141,29 @@ def build_config_report(config: Config) -> dict[str, Any]:
             "honeypot": {
                 "enabled": config.policy.honeypot.enabled,
                 "ban_seconds": config.policy.honeypot.ban_seconds,
+                "listeners": [
+                    {
+                        "name": listener.name,
+                        "listen_host": listener.listen_host,
+                        "listen_port": listener.listen_port,
+                        "backend": (
+                            None
+                            if listener.backend is None
+                            else {
+                                "scheme": listener.backend.scheme,
+                                "host": listener.backend.host,
+                                "port": listener.backend.port,
+                                "host_header": listener.backend.host_header,
+                                "server_header": listener.backend.server_header,
+                                "connect_timeout": listener.backend.connect_timeout,
+                                "read_timeout": listener.backend.read_timeout,
+                                "total_timeout": listener.backend.total_timeout,
+                                "max_response_bytes": listener.backend.max_response_bytes,
+                            }
+                        ),
+                    }
+                    for listener in config.policy.honeypot.listeners
+                ],
                 "routes": honeypot_routes,
             },
         },

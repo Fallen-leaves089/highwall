@@ -139,6 +139,28 @@ class ReloadIntegrationTests(unittest.TestCase):
         self.assertEqual(self.server.runtime.config.policy.allowed_hosts, ("test.local",))
         self.assertEqual(self.request("test.local")[0], 200)
 
+    def test_reload_rejects_honeypot_listener_changes(self) -> None:
+        data = _config_data(
+            self.stub.port,
+            ["new.local"],
+            listen_port=self.runtime.config.server.listen_port,
+        )
+        data["policy"]["honeypot"] = {
+            "enabled": True,
+            "ban_seconds": 0,
+            "presets": ["secrets"],
+            "listeners": [{"name": "decoy-admin", "listen_port": free_port()}],
+        }
+        self._write_config(data)
+        result = self.controller.reload()
+
+        self.assertEqual(result.status, "rejected")
+        self.assertIn("policy.honeypot.listeners", result.error)
+        self.assertIn("restart required", result.error)
+        self.assertEqual(self.server.runtime.config.policy.allowed_hosts, ("test.local",))
+        self.assertEqual(self.server.runtime.config.policy.honeypot.listeners, ())
+        self.assertEqual(self.request("test.local")[0], 200)
+
     def test_reload_swaps_tls_context_for_new_handshakes(self) -> None:
         replacement = object()
         generation = self.server.reload(self.server.runtime, replacement)  # type: ignore[arg-type]

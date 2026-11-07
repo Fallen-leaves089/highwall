@@ -6,7 +6,7 @@ import logging
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from .config import ConfigError, load_config
 from .proxy import GatewayServer, build_tls_context
@@ -41,9 +41,15 @@ def _safe_reload_error(exc: Exception) -> str:
 class ServerController:
     """Apply validated configuration changes without dropping in-flight requests."""
 
-    def __init__(self, config_path: Path, gateway: GatewayServer) -> None:
+    def __init__(
+        self,
+        config_path: Path,
+        gateway: GatewayServer,
+        honeypot_gateways: Sequence[GatewayServer] = (),
+    ) -> None:
         self.config_path = config_path
         self.gateway = gateway
+        self.honeypot_gateways = tuple(honeypot_gateways)
         self.admin: Any = None
         self._lock = threading.Lock()
 
@@ -58,6 +64,7 @@ class ServerController:
                 problem = reload_error(old_runtime.config, new_config)
                 if problem is not None:
                     raise ConfigError(problem)
+                old_tls_context = self.gateway.tls_context
                 new_tls_context = build_tls_context(new_config)
                 new_runtime = Runtime.build(new_config, previous=old_runtime)
             except Exception as exc:
@@ -68,7 +75,14 @@ class ServerController:
 
             try:
                 generation = self.gateway.reload(new_runtime, new_tls_context)
+                for server in self.honeypot_gateways:
+                    server.reload(new_runtime, new_tls_context)
             except Exception:
+                for server in (self.gateway, *self.honeypot_gateways):
+                    try:
+                        server.reload(old_runtime, old_tls_context)
+                    except Exception:
+                        _LOG.exception("failed to roll back gateway after reload error")
                 new_runtime.close()
                 raise
             if self.admin is not None:

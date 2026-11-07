@@ -4,6 +4,7 @@
     "listen_host": "127.0.0.1",
     "max_connections": 512,
     "max_connections_per_ip": 32,
+    "max_honeypot_connections": 64,
     "accept_backlog": 128,
     "shutdown_timeout": 30.0,
     "require_client_allowlist": false
@@ -50,6 +51,28 @@
       "new_connections_burst": 20,
       "read_chunk_bytes": 65536,
       "send_proxy_v2": false
+    }
+  ],
+  "honeypots": [
+    {
+      "name": "ssh-decoy",
+      "listen_port": 18092,
+      "template": "ssh",
+      "ban_seconds": 0
+    },
+    {
+      "name": "custom-decoy",
+      "listen_port": 18093,
+      "template": "custom",
+      "banner_text": "220 decoy SMTP ready\r\n",
+      "rules": [
+        {
+          "expect_text": "HELO",
+          "reply_text": "250 decoy.internal.invalid\r\n"
+        }
+      ],
+      "default_reply_text": "500 Unknown command\r\n",
+      "ban_seconds": 0
     }
   ],
   "threat_detection": {
