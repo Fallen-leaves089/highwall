@@ -656,7 +656,7 @@ python -m unittest tests.test_native_chain -v
 
 Without a Rust toolchain, download and verify a `highwall-native-core-*` binary from a Release, point `HIGHWALL_NATIVE_CORE_BIN` at it, and run the same chain test. This validates the real L4Wall-to-native H1 process path, but does not replace the H2/H3/gRPC Rust source tests, which still require `cargo test` or CI. Rebuild the binary for branch changes; an older Release asset is not evidence for new code.
 
-GitHub Actions runs Ruff, mypy, coverage, and the full suite on Ubuntu/Windows with Python 3.10–3.14. CodeQL scans every pull request and weekly; Dependabot checks Actions, Python development dependencies, and the Docker base image weekly. All third-party Actions are pinned to commit SHAs, and release images carry an SBOM, provenance, a cosign signature, and a GitHub attestation.
+GitHub Actions runs Ruff, mypy, coverage, and the full suite on Ubuntu/Windows with Python 3.10–3.15. CodeQL scans every pull request and weekly; Dependabot checks Actions, Python development dependencies, and the Docker base image weekly. All third-party Actions are pinned to commit SHAs, and release images carry an SBOM, provenance, a cosign signature, and a GitHub attestation.
 
 ## License
 

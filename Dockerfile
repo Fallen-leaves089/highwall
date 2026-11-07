@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ARG HIGHWALL_VERSION=0.13.0.dev0
 ARG HIGHWALL_REVISION=unknown

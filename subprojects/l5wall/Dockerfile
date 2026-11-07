@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-FROM python:3.12-slim-bookworm AS builder
+FROM python:3.15-slim-bookworm AS builder
 
 ARG L5WALL_VERSION=0.2.1
 ARG L5WALL_REVISION=unknown
@@ -12,7 +12,7 @@ RUN python -m pip install --no-cache-dir --upgrade pip setuptools \
     && python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
 
-FROM python:3.12-slim-bookworm
+FROM python:3.15-slim-bookworm
 
 ARG L5WALL_VERSION=0.2.1
 ARG L5WALL_REVISION=unknown
