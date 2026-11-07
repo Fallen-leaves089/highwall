@@ -17,7 +17,7 @@
   },
   "upstream": {
     "scheme": "http",
-    "host": "172.31.0.30",
+    "host": "172.41.0.30",
     "port": 18080,
     "connect_timeout": 3.0,
     "read_timeout": 15.0,
@@ -44,7 +44,7 @@
       "/actuator/heapdump",
       "/actuator/env"
     ],
-    "trusted_proxies": ["172.30.0.10/32"],
+    "trusted_proxies": ["172.40.0.10/32"],
     "allowed_client_networks": [],
     "denied_client_networks": [],
     "allowed_origins": [],

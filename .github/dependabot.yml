@@ -24,3 +24,72 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+
+  - package-ecosystem: cargo
+    directory: "/subprojects/native-core"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      rust-dependencies:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/subprojects/l4wall"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      l4wall-python:
+        patterns: ["*"]
+
+  - package-ecosystem: pip
+    directory: "/subprojects/l5wall"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      l5wall-python:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: "/subprojects/l5wall"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: "/deploy/honeypot/ssh"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: "/deploy/honeypot/web"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker
+    directory: "/deploy/honeypot/relay"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker-compose
+    directory: "/deploy/standard"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker-compose
+    directory: "/deploy/honeypot"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: docker-compose
+    directory: "/subprojects/l5wall/deploy"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
