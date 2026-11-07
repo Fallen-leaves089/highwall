@@ -47,7 +47,7 @@ services:
       - no-new-privileges:true
 
   upstream:
-    image: python:3.12-alpine
+    image: python:3.15-alpine
     container_name: highwall-standard-upstream
     command: ["python", "/app/echo.py"]
     environment:
