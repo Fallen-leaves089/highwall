@@ -34,7 +34,7 @@ Issues = "https://github.com/Fallen-leaves089/highwall/issues"
 Security = "https://github.com/Fallen-leaves089/highwall/security/policy"
 
 [project.optional-dependencies]
-test = ["cryptography==50.0.1"]
+test = ["cryptography==50.0.2"]
 
 [project.scripts]
 l5wall = "l5wall.cli:main"
