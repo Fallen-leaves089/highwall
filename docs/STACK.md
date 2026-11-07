@@ -117,8 +117,8 @@ L5 边界：`standard` 中由 HAProxy/Envoy 终止 TLS 时，后面的组件拿�
 |---|---|---|---|
 | 边缘 HTTP | `0.0.0.0:8080` | 是 | 示例入口，生产改为 80/443 |
 | 边缘 HTTPS | `0.0.0.0:8443` | 可选 | 需要证书后启用 |
-| HighWall | `172.30.0.20:18090` / `172.31.0.20` | 否 | 边缘网只允许 HAProxy，上游网只允许上游 |
-| 上游 | `172.31.0.30:18080` | 否 | `internal` 网络，只允许 HighWall 访问 |
+| HighWall | `172.40.0.20:18090` / `172.41.0.20` | 否 | 边缘网只允许 HAProxy，上游网只允许上游 |
+| 上游 | `172.41.0.30:18080` | 否 | `internal` 网络，只允许 HighWall 访问 |
 | HAProxy 管理 socket | `/var/run/haproxy/admin.sock` | 否 | 仅容器/本机管理 |
 
 ### native B+D-4
@@ -356,7 +356,7 @@ docker build --file Dockerfile.native --tag highwall-native-core:dev .
 docker run --rm highwall-native-core:dev --version
 ```
 
-Python `Dockerfile` 只包含 Python H1 基线；`Dockerfile.native` 才包含 Rust 核心和 vendored `h3`。当前环境没有 Docker daemon，两种真实容器拓扑都未运行验证，原生镜像也未发布。Windows 部署还必须显式创建并验证 TCP 和 UDP 入站规则：自动防火墙规则可能绑定二进制绝对路径，本轮已验证 `target/release-verify/release` 的 UDP 被 Block，而规范路径 `target/release` 的 UDP 正常。
+Python `Dockerfile` 只包含 Python H1 基线；`Dockerfile.native` 才包含 Rust 核心和 vendored `h3`。CI 已构建原生镜像并执行入口冒烟；真实容器、HAProxy、TLS、HTTP/2 和 WebSocket 拓扑仍未验收，原生镜像也未发布 GHCR。Windows 部署还必须显式创建并验证 TCP 和 UDP 入站规则：自动防火墙规则可能绑定二进制绝对路径，本轮已验证 `target/release-verify/release` 的 UDP 被 Block，而规范路径 `target/release` 的 UDP 正常。
 
 ## 14. 当前实现状态
 
@@ -365,15 +365,15 @@ Python `Dockerfile` 只包含 Python H1 基线；`Dockerfile.native` 才包含 R
 | L4Wall lite | 已实现 | 71 个测试、演示、配置校验通过 |
 | L4+L7 回环攻防验收 | 已实现 | 26 项端到端测试；真实 TCP 串联 L4Wall/HighWall/模拟上游 |
 | 原生 B+D-4 数据面 | 已实现 | Rust 148 项测试通过；真实 TCP/UDP 监听器、TLS/QUIC、H1/H2/H3、PROXY v2、Retry、未知 ALPN、0-RTT、迁移、ACL 和 TCP 重连风暴有覆盖 |
-| 原生独立镜像 | 已定义，未构建验证 | `Dockerfile.native` 多阶段构建、非 root；当前 Docker daemon 不可用，未本地验证，也未发布 GHCR |
+| 原生独立镜像 | 已定义；本地/CI 构建+入口冒烟 | `Dockerfile.native` 多阶段构建、非 root；本地与 CI 构建并执行 `--version`，真实拓扑和 GHCR 发布未验证 |
 | L4Wall→原生核心真实串联 | 已实现 | 显式开启后 1 项通过；验证 PROXY v2 真实来源链 |
 | 根 Python 回归与覆盖率 | 已实现 | 全量回归通过；原生真实串联默认跳过，显式开启后单独通过；分支覆盖率 81% |
 | L5Wall 子项目 | 已实现 C1 | 42 个测试通过；回环 H1 桥接、瞬时监听错误退避和有界优雅排空，不声明 H2/H3 |
 | H2/H3/WebSocket/gRPC | 原生 C3，部分 C4 未覆盖 | H1/H2/H3 请求/响应、有界正文、压缩、trailers 和 gRPC 有测试；r5 定向关闭 HWA-08/09/10，r6 在窄范围关闭 HWA-11；真实 WebSocket 端到端、QPACK 阻塞和流式背压饱和仍待补 |
-| 标准容器拓扑攻防验收 | 未验证 | Docker daemon 不可用；未做容器、HAProxy、TLS、HTTP/2、WebSocket 的真实拓扑 |
+| 标准容器拓扑攻防验收 | 基础 HTTP 拓扑已验收；完整攻防未验证 | `deploy/standard/verify.py` 已通过边缘转发、XFF 清洗和端口不发布检查；TLS、HTTP/2、WebSocket 真实拓扑攻防未验证 |
 | DSH 独立安全验收 | r5/r6 定向关闭 8/8，完整验收未完成 | 首轮 0 Critical / 0 High / 3 Medium / 8 Low / 3 信息项；r5 的 HWA-01/02/03/07/08/09/10 定向关闭，HWA-11 在 r6 窄范围关闭；HWA-04/05/06 仅由维护者 r7 回归，仍未经 DSH 独立复测；H3 绕过 L4Wall、封禁后握手成本、完整 WS/gRPC/流控/管理面等仍未关闭 |
 | L4Wall 子项目迁移 | 已完成 | `subprojects/l4wall` |
-| 标准部署骨架 | 已提供 | Docker Compose/HAProxy/HighWall 示例；当前环境无 Docker daemon，未做容器级运行验证 |
+| 标准部署骨架 | 已提供且基础验收通过 | Docker Compose/HAProxy/HighWall 示例；标准栈容器化启动和验收通过，完整攻击矩阵仍未完成 |
 | 真实 IP 清洗配置 | 已提供 | HAProxy 删除并重写 XFF |
 | 旁路验收脚本 | 已提供 | `deploy/standard/verify.py` |
 | L4Wall 共享封禁读取端 | 已实现 | 私网 Redis、严格解析、本地优先、故障隔离；测试覆盖超时/坏数据/容量 |

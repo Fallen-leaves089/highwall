@@ -2,7 +2,7 @@
 
 Rust 原生数据面，采用 B+D-4 架构：在同一个模块化网关内完成 L5 TLS/QUIC 终止与 L7 H1/H2/H3、WebSocket、gRPC 检查。`subprojects/l5wall` 仍是独立子项目，用于 L5 单独部署和演进；两者共享策略目标，但不是相互替代关系。
 
-当前版本为 `0.12.0` Alpha 预发布。本地完整链路回归和 release 构建已完成；DSH 首轮独立验收为 0 Critical、0 High、3 Medium、8 Low、3 信息项。r5 定向复测为 0 Critical、0 High：8 个指定项中 7 项定向关闭（HWA-01/02/03/07/08/09/10）；HWA-11 随后在 r6 窄范围独立复测中关闭（400 + 270、失败回退、上游零命中、审计不泄漏）；维护者 r7 已用可重复测试复核 HWA-04/05/06。完整残余风险和生产准入边界见 [`docs/REGRESSION-R7-20261102.md`](../../docs/REGRESSION-R7-20261102.md)、[`docs/DSH-R6-RESULTS-20261101.md`](../../docs/DSH-R6-RESULTS-20261101.md)、[`docs/DSH-R5-RESULTS-20261101.md`](../../docs/DSH-R5-RESULTS-20261101.md) 与 [`docs/DSH-REMEDIATION-20261101.md`](../../docs/DSH-REMEDIATION-20261101.md)。在完整验收和人工审批前，不应把它标记为生产已完成。
+当前源码版本为 `0.13.0-dev0`（开发构建；最近发布资产为 HighWall `0.12.0` Alpha）。本地完整链路回归和 release 构建已完成；DSH 首轮独立验收为 0 Critical、0 High、3 Medium、8 Low、3 信息项。r5 定向复测为 0 Critical、0 High：8 个指定项中 7 项定向关闭（HWA-01/02/03/07/08/09/10）；HWA-11 随后在 r6 窄范围独立复测中关闭（400 + 270、失败回退、上游零命中、审计不泄漏）；维护者 r7 已用可重复测试复核 HWA-04/05/06。完整残余风险和生产准入边界见 [`docs/REGRESSION-R7-20261102.md`](../../docs/REGRESSION-R7-20261102.md)、[`docs/DSH-R6-RESULTS-20261101.md`](../../docs/DSH-R6-RESULTS-20261101.md)、[`docs/DSH-R5-RESULTS-20261101.md`](../../docs/DSH-R5-RESULTS-20261101.md) 与 [`docs/DSH-REMEDIATION-20261101.md`](../../docs/DSH-REMEDIATION-20261101.md)。在完整验收和人工审批前，不应把它标记为生产已完成。
 
 ## 安全默认值
 

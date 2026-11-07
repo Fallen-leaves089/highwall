@@ -6,7 +6,7 @@
 
 HighWall 是一个**失败关闭（fail-closed）的 HTTP 应用层反向代理与防护网关**。它保留零第三方依赖的 Python HTTP/1.1 基线，同时提供 Rust 原生 B+D-4 数据面，目标是让应用入口的解析、策略、资源限制和审计可验证、可回归。
 
-当前源码：`0.12.0`（`v0.12.0` Alpha 预发布）；最新稳定版：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查；v0.12 进入护栏阶段，加入精确 IP 执法键、Safe Ops 只读预演、运行时能力清单、独立 L5Wall 子项目、L4Wall PROXY v2 真实来源链和原生 B+D-4 数据面。原生核心已覆盖 TLS/QUIC、H1/H2/H3、H1 WebSocket、H2/H3 gRPC、有界正文 WAF/DLP 和 QUIC 来源 ACL，H1/H2/H3 按 C3 声明，C4 仍有未覆盖项。DSH 已完成首轮、r5 与 r6 定向独立复测：0 Critical、0 High；r5 的 8 个定向项中 7 项关闭，HWA-11 随后在 r6 窄范围复测中关闭；维护者 r7 又对 HWA-04/05/06 做了可重复定向回归。完整生产准入尚未完成，因此它仍不是已经完成第三方审计或生产准入的产品。
+当前源码：`0.13.0.dev0`（开发构建）；最新预发布：`0.12.0` Alpha；最新稳定版：`0.11.0`。v0.3 把防护目标从“防响应泄漏”扩展为同时覆盖**机密性、完整性和可用性**；v0.4 增加可配置的精确路径蜜罐、首击封禁和有界拖延；v0.5 增加内置蜜罐模板与预设组；v0.6 增加配置生成、实际生效值检查和本地快速部署；v0.7 收紧路径规范化、请求 body 编码、响应 DLP 与审计脱敏，并加入路由级限速和 TLS HSTS；v0.8 增加多信号攻击者指纹、持久标记、两阶段遏制、L7 DDoS 告警和异步 Webhook；v0.9 增加原子配置热加载、TLS 证书热轮换、优雅排空停机和重载代次指标；v0.10 增加配置变更预演 `highwall diff`、CI 静态检查/类型检查/覆盖率门槛、CodeQL、Dependabot 和发布镜像签名/证明；v0.11 增加独立的 L4Wall 连接级防护子项目、标准复合部署骨架和可复现实机攻防靶场，并补齐 503 在途审计与发布脱敏检查；v0.12 进入护栏阶段，加入精确 IP 执法键、Safe Ops 只读预演、运行时能力清单、独立 L5Wall 子项目、L4Wall PROXY v2 真实来源链和原生 B+D-4 数据面。原生核心已覆盖 TLS/QUIC、H1/H2/H3、H1 WebSocket、H2/H3 gRPC、有界正文 WAF/DLP 和 QUIC 来源 ACL，H1/H2/H3 按 C3 声明，C4 仍有未覆盖项。DSH 已完成首轮、r5 与 r6 定向独立复测：0 Critical、0 High；r5 的 8 个定向项中 7 项关闭，HWA-11 随后在 r6 窄范围复测中关闭；维护者 r7 又对 HWA-04/05/06 做了可重复定向回归。完整生产准入尚未完成，因此它仍不是已经完成第三方审计或生产准入的产品。
 
 > **v0.12 重点**：L4Wall 继续负责 TCP 连接准入、限速、字节上限和封禁；Python HighWall 保留 H1 基线和策略工具；Rust 原生 B+D-4 数据面负责 TLS/QUIC、H1/H2/H3 和有界正文检查。上线前先用 [docs/STACK.md](docs/STACK.md) 核对入口、直连封堵、真实客户端 IP 和 TCP/UDP 分叉。
 
@@ -324,7 +324,7 @@ L4Wall `0.1.0` 已作为独立 Release 发布：[l4wall-v0.1.0](https://github.c
 
 ## L5/H2/H3 与原生 B+D-4
 
-原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前版本 `0.12.0`。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。
+原生 B+D-4 数据面位于 [`subprojects/native-core`](subprojects/native-core/README.md)，当前源码版本 `0.13.0-dev0`（最近发布资产为 `0.12.0`）。它在同一 Rust 网关内完成 TLS/QUIC 终止和 H1/H2/H3 严格解析，支持 H1 WebSocket、H2/H3 gRPC、压缩/trailers、有界正文 WAF/DLP、精确 IP 封禁、TLS mTLS/CRL、QUIC Retry、默认禁 0-RTT/迁移和 QUIC 客户端网络 ACL。TCP 的 H1/H2 可由 L4Wall 发送标准 PROXY v2 后进入原生核心；UDP 的 H3 当前直达原生 QUIC，不经过 L4Wall，这是部署中必须显式理解的 TCP/UDP 分叉。
 
 当前 H1/H2/H3 按 C3 声明，C4 尚未声明：标准 JA3/JA4、真实 WebSocket 端到端、QPACK 阻塞、流式背压饱和和部分 slow-flow 攻击仍属未覆盖项。精确 IP 封禁、Safe Ops 只读预演和独立 L5Wall `0.2.1` 也已落地；L5Wall 仍为 C1，提供 TLS 终止、会话策略、有界 H1 回环桥接、瞬时监听错误退避和有界优雅排空。Safe Ops 还没有执行器，R2/R3 保持默认拒绝。
 

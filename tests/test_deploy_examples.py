@@ -14,12 +14,12 @@ class StandardDeploymentConfigTests(unittest.TestCase):
         config = load_config(ROOT / "deploy/standard/highwall/config.json")
         self.assertEqual(config.server.listen_host, "0.0.0.0")
         self.assertEqual(config.server.listen_port, 18090)
-        self.assertEqual(config.upstream.host, "172.31.0.30")
+        self.assertEqual(config.upstream.host, "172.41.0.30")
         self.assertEqual(config.upstream.port, 18080)
         self.assertEqual(config.policy.allowed_hosts, ("app.internal",))
         self.assertEqual(
             config.policy.proxy_networks,
-            (ipaddress.ip_network("172.30.0.10/32"),),
+            (ipaddress.ip_network("172.40.0.10/32"),),
         )
         self.assertEqual(config.policy.max_xff_hops, 2)
 
@@ -87,6 +87,26 @@ class HoneypotDeploymentExampleTests(unittest.TestCase):
         self.assertTrue((ROOT / "deploy/honeypot/.env.example").is_file())
         gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
         self.assertIn("/deploy/honeypot/.env", gitignore)
+
+
+class ContainerBuildContextTests(unittest.TestCase):
+    def test_native_image_context_keeps_sources_and_excludes_build_outputs(self) -> None:
+        dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        patterns = {line.strip() for line in dockerignore.splitlines() if line.strip()}
+        self.assertNotIn("subprojects", patterns)
+        self.assertIn("**/target", patterns)
+        self.assertIn("**/target-*", patterns)
+        self.assertIn("!subprojects/native-core/Cargo.toml", patterns)
+        self.assertIn("!subprojects/native-core/Cargo.lock", patterns)
+        self.assertIn("!subprojects/native-core/src/**", patterns)
+
+        dockerfile = (ROOT / "Dockerfile.native").read_text(encoding="utf-8")
+        self.assertIn("COPY subprojects/native-core/Cargo.toml", dockerfile)
+        self.assertIn(
+            "COPY subprojects/native-core/Cargo.toml subprojects/native-core/Cargo.lock",
+            dockerfile,
+        )
+        self.assertIn("COPY subprojects/native-core/src", dockerfile)
 
 
 if __name__ == "__main__":
