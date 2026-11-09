@@ -2,7 +2,7 @@ name: highwall-standard
 
 services:
   haproxy:
-    image: haproxy:3.2-alpine
+    image: haproxy:3.4-alpine
     container_name: highwall-standard-edge
     depends_on:
       - highwall
