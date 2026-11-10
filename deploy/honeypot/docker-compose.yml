@@ -46,6 +46,9 @@ services:
       - "8080"
     environment:
       DECOY_PORT: "8080"
+      DECOY_MAX_CONNECTIONS: "${HONEYPOT_WEB_MAX_CONNECTIONS:-32}"
+      DECOY_IDLE_TIMEOUT_SECONDS: "${HONEYPOT_WEB_IDLE_TIMEOUT_SECONDS:-30}"
+      DECOY_MAX_CONNECTION_SECONDS: "${HONEYPOT_WEB_MAX_CONNECTION_SECONDS:-120}"
       PYTHONDONTWRITEBYTECODE: "1"
     networks:
       honeypot-web:
@@ -58,7 +61,7 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    pids_limit: 64
+    pids_limit: 96
     mem_limit: 128m
     cpus: "0.50"
     restart: unless-stopped
@@ -80,6 +83,11 @@ services:
       LISTEN_PORT: "2222"
       TARGET_HOST: "172.30.0.10"
       TARGET_PORT: "2222"
+      MAX_CONNECTIONS: "${HONEYPOT_RELAY_MAX_CONNECTIONS:-64}"
+      MAX_CONNECTIONS_PER_IP: "${HONEYPOT_RELAY_MAX_CONNECTIONS_PER_IP:-16}"
+      IDLE_TIMEOUT_SECONDS: "${HONEYPOT_RELAY_IDLE_TIMEOUT_SECONDS:-300}"
+      MAX_CONNECTION_SECONDS: "${HONEYPOT_RELAY_MAX_CONNECTION_SECONDS:-3600}"
+      MAX_BYTES_PER_DIRECTION: "${HONEYPOT_RELAY_MAX_BYTES_PER_DIRECTION:-67108864}"
     networks:
       - honeypot-ssh-edge
       - honeypot-ssh
@@ -94,8 +102,8 @@ services:
       - SETUID
     security_opt:
       - no-new-privileges:true
-    pids_limit: 64
-    mem_limit: 64m
+    pids_limit: 192
+    mem_limit: 128m
     cpus: "0.25"
     restart: unless-stopped
     logging:
@@ -116,6 +124,11 @@ services:
       LISTEN_PORT: "8080"
       TARGET_HOST: "172.31.0.20"
       TARGET_PORT: "8080"
+      MAX_CONNECTIONS: "${HONEYPOT_RELAY_MAX_CONNECTIONS:-64}"
+      MAX_CONNECTIONS_PER_IP: "${HONEYPOT_RELAY_MAX_CONNECTIONS_PER_IP:-16}"
+      IDLE_TIMEOUT_SECONDS: "${HONEYPOT_RELAY_IDLE_TIMEOUT_SECONDS:-300}"
+      MAX_CONNECTION_SECONDS: "${HONEYPOT_RELAY_MAX_CONNECTION_SECONDS:-3600}"
+      MAX_BYTES_PER_DIRECTION: "${HONEYPOT_RELAY_MAX_BYTES_PER_DIRECTION:-67108864}"
     networks:
       - honeypot-web-edge
       - honeypot-web
@@ -130,8 +143,8 @@ services:
       - SETUID
     security_opt:
       - no-new-privileges:true
-    pids_limit: 64
-    mem_limit: 64m
+    pids_limit: 192
+    mem_limit: 128m
     cpus: "0.25"
     restart: unless-stopped
     logging:

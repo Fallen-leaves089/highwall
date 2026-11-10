@@ -13,6 +13,29 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 ROOT = Path(__file__).resolve().parent
+PUBLIC_PROBE_TARGETS = (("1.1.1.1", 80), ("1.1.1.1", 53))
+METADATA_PROBE_TARGETS = (
+    ("169.254.169.254", 80),
+    ("169.254.170.2", 80),
+    ("100.100.100.200", 80),
+)
+HOST_API_PROBE_PORTS = (2375, 2376)
+FORWARDER_GATEWAYS = {
+    "ssh-forward": ("172.32.0.1", "172.30.0.1"),
+    "web-forward": ("172.33.0.1", "172.31.0.1"),
+}
+PROBE_SCRIPT = (
+    "import socket, sys\n"
+    "sock = socket.socket()\n"
+    "sock.settimeout(2)\n"
+    "try:\n"
+    "    sock.connect((sys.argv[1], int(sys.argv[2])))\n"
+    "except OSError:\n"
+    "    print('BLOCKED')\n"
+    "    sys.exit(0)\n"
+    "print('REACHABLE')\n"
+    "sys.exit(1)\n"
+)
 
 
 class CheckFailed(RuntimeError):
@@ -167,84 +190,61 @@ def _check_loopback_ports() -> str:
     return ", ".join(details)
 
 
+def _probe_blocked(service: str, host: str, port: int) -> None:
+    process = _compose("exec", "-T", service, "python", "-c", PROBE_SCRIPT, host, str(port))
+    output = "\n".join(part.strip() for part in (process.stdout, process.stderr) if part and part.strip())
+    _require("REACHABLE" not in output, f"{service} can reach {host}:{port}")
+    _require("BLOCKED" in output, f"{service} probe failed for {host}:{port}: {output}")
+
+
 def _check_web_egress_blocked() -> str:
-    script = (
-        "import socket, sys\n"
-        "sock = socket.socket()\n"
-        "sock.settimeout(2)\n"
-        "try:\n"
-        "    sock.connect(('1.1.1.1', 80))\n"
-        "except OSError:\n"
-        "    print('BLOCKED')\n"
-        "    sys.exit(0)\n"
-        "print('REACHABLE')\n"
-        "sys.exit(1)\n"
-    )
-    process = _compose("exec", "-T", "web-live", "python", "-c", script)
-    _require("REACHABLE" not in process.stdout, "web container can reach the public Internet")
-    _require(
-        "BLOCKED" in process.stdout,
-        f"egress check failed: {(process.stderr or process.stdout).strip()}",
-    )
-    return "web container has no public egress"
+    targets = (*PUBLIC_PROBE_TARGETS, *METADATA_PROBE_TARGETS)
+    targets += tuple(("172.31.0.1", port) for port in HOST_API_PROBE_PORTS)
+    for host, port in targets:
+        _probe_blocked("web-live", host, port)
+    return "web container cannot reach public, metadata, or host API endpoints"
 
 
 def _check_forwarder_egress_blocked() -> str:
-    script = (
-        "import socket, sys\n"
-        "sock = socket.socket()\n"
-        "sock.settimeout(2)\n"
-        "try:\n"
-        "    sock.connect(('1.1.1.1', 80))\n"
-        "except OSError:\n"
-        "    print('BLOCKED')\n"
-        "    sys.exit(0)\n"
-        "print('REACHABLE')\n"
-        "sys.exit(1)\n"
-    )
     checked: list[str] = []
-    for service in ("ssh-forward", "web-forward"):
-        process = _compose("exec", "-T", service, "python", "-c", script)
-        _require(
-            "REACHABLE" not in process.stdout,
-            f"{service} can reach the public Internet",
-        )
-        _require(
-            "BLOCKED" in process.stdout,
-            f"{service} egress check failed: {(process.stderr or process.stdout).strip()}",
-        )
+    for service, gateways in FORWARDER_GATEWAYS.items():
+        targets = (*PUBLIC_PROBE_TARGETS, *METADATA_PROBE_TARGETS)
+        targets += tuple((gateway, port) for gateway in gateways for port in HOST_API_PROBE_PORTS)
+        for host, port in targets:
+            _probe_blocked(service, host, port)
         checked.append(service)
-    return f"{', '.join(checked)} have no public egress"
+    return f"{', '.join(checked)} cannot reach public, metadata, or host API endpoints"
+
+
+def _check_ssh_egress_blocked() -> str:
+    targets = (*PUBLIC_PROBE_TARGETS, *METADATA_PROBE_TARGETS)
+    targets += tuple(("172.30.0.1", port) for port in HOST_API_PROBE_PORTS)
+    commands = ["command -v nc >/dev/null 2>&1 || { echo PROBE_MISSING; exit 127; }"]
+    for host, port in targets:
+        commands.append(f"if nc -z -w 2 {host} {port}; then echo REACHABLE:{host}:{port}; exit 1; fi")
+    commands.append("echo BLOCKED; exit 0")
+    process = _compose("exec", "-T", "ssh-live", "sh", "-c", "; ".join(commands))
+    if process.returncode == 127:
+        return "skipped: nc is not installed in the SSH image"
+    output = "\n".join(part.strip() for part in (process.stdout, process.stderr) if part and part.strip())
+    _require("REACHABLE" not in output, f"SSH container can reach an external endpoint: {output}")
+    _require("BLOCKED" in output, f"SSH egress check failed: {output}")
+    return "SSH container cannot reach public, metadata, or host API endpoints"
 
 
 def _check_forwarder_isolation() -> str:
-    script = (
-        "import socket, sys\n"
-        "sock = socket.socket()\n"
-        "sock.settimeout(2)\n"
-        "try:\n"
-        "    sock.connect((sys.argv[1], int(sys.argv[2])))\n"
-        "except OSError:\n"
-        "    print('BLOCKED')\n"
-        "    sys.exit(0)\n"
-        "print('REACHABLE')\n"
-        "sys.exit(1)\n"
-    )
     checks = (
         ("ssh-forward", "172.31.0.20", "8080"),
         ("web-forward", "172.30.0.10", "2222"),
     )
     for service, host, port in checks:
-        process = _compose("exec", "-T", service, "python", "-c", script, host, port)
-        _require(
-            "REACHABLE" not in process.stdout,
-            f"{service} can reach the other decoy network",
-        )
-        _require(
-            "BLOCKED" in process.stdout,
-            f"{service} isolation check failed: {(process.stderr or process.stdout).strip()}",
-        )
+        _probe_blocked(service, host, int(port))
     return "forwarders cannot reach the other decoy network"
+
+
+def _check_web_cross_container_blocked() -> str:
+    _probe_blocked("web-live", "172.30.0.10", 2222)
+    return "web container cannot reach the SSH decoy network"
 
 
 def _check_cross_container_blocked() -> str:
@@ -254,16 +254,21 @@ def _check_cross_container_blocked() -> str:
         "ssh-live",
         "sh",
         "-c",
-        "command -v nc >/dev/null 2>&1 || { echo NC_MISSING; exit 127; }; "
+        "if command -v nc >/dev/null 2>&1; then "
         "if nc -z -w 2 172.31.0.20 8080; then echo REACHABLE; exit 1; "
-        "else echo BLOCKED; exit 0; fi",
+        "else echo BLOCKED; exit 0; fi; fi; "
+        "if command -v wget >/dev/null 2>&1; then "
+        "if wget -q -T 2 -O /dev/null http://172.31.0.20:8080/; then echo REACHABLE; exit 1; "
+        "else echo BLOCKED; exit 0; fi; fi; "
+        "echo PROBE_MISSING; exit 127",
     )
     if process.returncode == 127:
-        return "skipped: nc is not installed in the SSH image"
-    _require("REACHABLE" not in process.stdout, "SSH container can reach the web decoy network")
+        return "skipped: nc and wget are not installed in the SSH image"
+    output = "\n".join(part.strip() for part in (process.stdout, process.stderr) if part and part.strip())
+    _require("REACHABLE" not in output, "SSH container can reach the web decoy network")
     _require(
         "BLOCKED" in process.stdout,
-        f"cross-network check failed: {(process.stderr or process.stdout).strip()}",
+        f"cross-network check failed: {output}",
     )
     return "SSH and web containers are network-isolated"
 
@@ -326,7 +331,9 @@ def main(argv: list[str] | None = None) -> int:
                     _run("docker/loopback", _check_loopback_ports),
                     _run("docker/web-egress", _check_web_egress_blocked),
                     _run("docker/forwarder-egress", _check_forwarder_egress_blocked),
+                    _run("docker/ssh-egress", _check_ssh_egress_blocked),
                     _run("docker/cross-network", _check_cross_container_blocked),
+                    _run("docker/web-cross-network", _check_web_cross_container_blocked),
                     _run("docker/forwarder-isolation", _check_forwarder_isolation),
                 ]
             )
