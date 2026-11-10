@@ -93,6 +93,29 @@ SSH 密码是可见的诱饵值 `highwall-decoy-only`，可以在构建前通过
 这些值是资源边界，不是带宽或 DDoS 清洗保证。提高上限时必须同步检查容器
 `pids_limit`、内存、网关容量和日志速率。
 
+## 镜像用途与边界
+
+本目录只构建蜜罐侧的本地镜像，不构建 HighWall/L4Wall 网关镜像，也不会自动发布到
+GHCR。默认 Compose 项目会生成以下三个镜像；修改项目名或显式 tag 后，名称会随之变化。
+
+| 本地镜像 | 构建位置 | 运行服务 | 用途 | 明确不是 |
+|---|---|---|---|---|
+| `highwall-honeypot-ssh-live:latest` | `ssh/Dockerfile` | `ssh-live` | 运行真实 OpenSSH，提供可登录的 SSH 诱饵和交互记录 | 宿主 SSH、管理入口或真实账户系统 |
+| `highwall-honeypot-web-live:latest` | `web/Dockerfile` | `web-live` | 运行有状态的伪登录/管理台，验证登录、会话和网关转发 | 生产 Web 应用、身份系统或数据库 |
+| `highwall-honeypot-relay:latest` | `relay/Dockerfile` | `ssh-forward`、`web-forward` | 两个转发服务共用的最小 TCP 转发器，发布回环端口并执行连接、时长和流量限制 | 内容服务、WAF、业务网关或封禁组件 |
+
+补充约束：
+
+- SSH 镜像在构建时把 `HONEYPOT_SSH_PASSWORD` 写入镜像；它是可见的诱饵值，
+  不是密钥或安全边界，绝不能复用真实密码。
+- 镜像只包含诱饵代码和运行依赖。不要把真实凭据、客户数据、私钥、生产数据库
+  或宿主目录放进镜像；需要持久证据时使用外部受保护收集器。
+- `*:test` 或 `*-python315:test` 等标签只用于兼容性/验收，例如验证 Python 3.15
+  运行环境；它们可以随时删除，不是正式部署入口。正式部署应固定明确 tag 或 digest，
+  不要依赖 `latest`。
+- 容器被攻陷后，不要原地修补运行中的容器；先按“被攻陷后的处置”隔离和取证，
+  再从仓库中的干净定义重新构建。
+
 ## 宿主网关配置
 
 ### HighWall L7 listener

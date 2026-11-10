@@ -147,6 +147,8 @@ HighWall 只做入口、Host/来源控制和资源限制，真实诱饵应用运
 无宿主挂载、可重置的容器或虚拟机中。可直接使用
 [`deploy/honeypot`](../deploy/honeypot/README.md) 的最小闭环。
 
+该目录默认构建三个本地镜像：`highwall-honeypot-ssh-live` 是真实 OpenSSH 诱饵，`highwall-honeypot-web-live` 是 HTTP 伪应用，`highwall-honeypot-relay` 是供两个转发服务共用的最小 TCP 转发器；用途和测试标签区别见[镜像用途与边界](../deploy/honeypot/README.md#镜像用途与边界)。
+
 行为边界：
 
 - 只支持 HTTP 后端，且必须是回环、RFC1918 或 IPv6 ULA 的 IP 字面量；禁止公网、链路本地、云元数据地址和域名。
