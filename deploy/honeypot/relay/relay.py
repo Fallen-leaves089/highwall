@@ -35,6 +35,17 @@ def _port(name: str) -> int:
     return value
 
 
+def _listen_host() -> str:
+    raw = os.environ.get("LISTEN_HOST", "127.0.0.1").strip()
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError as exc:
+        raise SystemExit("LISTEN_HOST must be an IPv4 literal") from exc
+    if address.version != 4:
+        raise SystemExit("LISTEN_HOST must be an IPv4 literal")
+    return str(address)
+
+
 def _positive_int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
     if not raw:
@@ -225,6 +236,7 @@ def _handle(
 
 def main() -> int:
     listen_port = _port("LISTEN_PORT")
+    listen_host = _listen_host()
     target_port = _port("TARGET_PORT")
     max_connections = _positive_int("MAX_CONNECTIONS", MAX_CONNECTIONS)
     max_connections_per_ip = _positive_int("MAX_CONNECTIONS_PER_IP", MAX_CONNECTIONS_PER_IP)
@@ -245,10 +257,10 @@ def main() -> int:
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    server.bind(("0.0.0.0", listen_port))
+    server.bind((listen_host, listen_port))
     server.listen(128)
     sys.stdout.write(
-        f"relay listening on {listen_port} -> {target_host}:{target_port} as uid {os.getuid()} "
+        f"relay listening on {listen_host}:{listen_port} -> {target_host}:{target_port} as uid {os.getuid()} "
         f"limits={max_connections}/{max_connections_per_ip} idle={idle_timeout}s "
         f"total={max_connection_seconds}s bytes={max_bytes}\n"
     )
