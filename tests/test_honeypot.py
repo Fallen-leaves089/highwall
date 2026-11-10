@@ -4,6 +4,7 @@ import json
 import tempfile
 import threading
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from highwall.config import ConfigError, HoneypotBackendConfig
@@ -56,6 +57,38 @@ def honeypot_policy(*, enabled: bool = True, ban_seconds: float = 5.0) -> dict:
         "ban_seconds": ban_seconds,
         "routes": decoy_routes(),
     }
+
+
+class _CompromisedBackendHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:
+        body = b"compromised backend"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Server", "compromised-nginx")
+        self.send_header("X-Powered-By", "php/8.2")
+        self.send_header("Content-Security-Policy", "default-src *")
+        self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Clear-Site-Data", '"cookies", "storage"')
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Permissions-Policy", "camera=*")
+        self.send_header("Refresh", "0; url=https://evil.example/")
+        self.send_header("Set-Cookie", "ok=1; Path=/")
+        self.send_header("Set-Cookie", "scoped=2; dOmAiN=test.local; Path=/; SameSite=Lax")
+        self.send_header("Set-Cookie", "__Host-shadow=3; Path=/; Secure")
+        self.send_header("Set-Cookie", "__Secure-shadow=4; Path=/; Secure")
+        self.send_header("Set-Cookie", "bad name=5; Path=/")
+        self.send_header("Set-Cookie", "=6; Path=/")
+        self.send_header("Location", "https://evil.example/landing")
+        self.send_header("Location", "/login")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format: str, *args: object) -> None:
+        pass
 
 
 class HoneypotConfigTests(unittest.TestCase):
@@ -513,7 +546,7 @@ class HoneypotIntegrationTests(unittest.TestCase):
         self.assertEqual(header_values(headers, "X-Powered-By"), ["php/leaky"])
         self.assertEqual(header_values(headers, "X-Custom"), ["keep-me"])
         self.assertEqual(len(header_values(headers, "Set-Cookie")), 2)
-        self.assertEqual(header_values(headers, "Content-Security-Policy"), ["default-src *"])
+        self.assertEqual(header_values(headers, "Content-Security-Policy"), [])
         self.assertEqual(self.stub.state.snapshot(), [])
 
         requests = backend_stub.state.snapshot()
@@ -535,6 +568,43 @@ class HoneypotIntegrationTests(unittest.TestCase):
         event = json.loads(audit_text(Path(self.temp.name)).splitlines()[-1])
         self.assertEqual(event["event"], "honeypot_backend_forwarded")
         self.assertEqual(event["outcome"], "forwarded")
+
+    def test_compromised_backend_cannot_set_cross_origin_state(self) -> None:
+        self.start(ban_seconds=0)
+        backend = ThreadingHTTPServer(("127.0.0.1", 0), _CompromisedBackendHandler)
+        backend.daemon_threads = True
+        thread = threading.Thread(target=backend.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        thread.start()
+
+        def cleanup() -> None:
+            backend.shutdown()
+            backend.server_close()
+            thread.join(timeout=2.0)
+
+        self.addCleanup(cleanup)
+        port = self.start_honeypot_port(backend=self.backend_config(int(backend.server_address[1])))
+
+        status, headers, body = parse_response(send_raw(port, build_request(path="/dashboard")))
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"compromised backend")
+        self.assertEqual(header_values(headers, "Server"), ["compromised-nginx"])
+        self.assertEqual(header_values(headers, "X-Powered-By"), ["php/8.2"])
+        self.assertEqual(header_values(headers, "Location"), ["/login"])
+        self.assertEqual(
+            header_values(headers, "Set-Cookie"),
+            ["ok=1; Path=/", "scoped=2; Path=/; SameSite=Lax"],
+        )
+        for name in (
+            "Content-Security-Policy",
+            "Strict-Transport-Security",
+            "Access-Control-Allow-Origin",
+            "Clear-Site-Data",
+            "X-Frame-Options",
+            "Permissions-Policy",
+            "Refresh",
+        ):
+            with self.subTest(name=name):
+                self.assertEqual(header_values(headers, name), [])
 
     def test_high_interaction_static_decoy_wins_without_touching_backend(self) -> None:
         self.start(ban_seconds=0)

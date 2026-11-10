@@ -37,11 +37,17 @@ SSH 与 Web 容器分别位于两个独立的 Docker internal 网络，既不能
 `127.0.0.1` 的端口；容器化网关必须显式接入两个 internal 网络，并使用固定
 私网 IP，因为 `backend` 配置只接受 IP 字面量，不接受 Docker 服务名。
 
+即使转发器或诱饵被攻陷，连接总数、单 IP 连接数、空闲/总时长、单方向字节数
+和 HTTP 并发处理器也都有上限。Web 日志以 socket peer 为可信来源；客户端提供的
+`X-Forwarded-For` 只记录为 `declared_xff`，不得用于访问控制或事件归因的唯一依据。
+在 Docker 端口转发下，转发器看到的来源通常是 edge 网关地址，单 IP 上限可能因此
+接近全局上限；部署时应结合实际路径调整这些值并观察拒绝率。
+
 ## 前置条件
 
 - Docker Engine 或 Docker Desktop，带 Compose v2。
 - 对目标网络有明确授权。不要在你没有所有权或管理权的网络上部署。
-- 默认容器合计约 1.5 vCPU、512 MiB 内存，不含 Docker 自身和网关开销。
+- 默认容器合计约 1.5 vCPU、640 MiB 内存上限，不含 Docker 自身和网关开销。
 - 不要放入真实凭据、客户数据、私钥、生产数据库快照或宿主目录挂载。
   这些诱饵应当随时可以丢弃和重建。
 
@@ -70,6 +76,22 @@ python verify.py --docker require
 
 SSH 密码是可见的诱饵值 `highwall-decoy-only`，可以在构建前通过 `.env`
 修改。它不是安全边界，绝不能复用真实账户密码或密钥。
+
+### 资源限额
+
+| 变量 | 默认值 | 作用 |
+|---|---:|---|
+| `HONEYPOT_RELAY_MAX_CONNECTIONS` | 64 | 每个转发器的总并发连接上限 |
+| `HONEYPOT_RELAY_MAX_CONNECTIONS_PER_IP` | 16 | 转发器观察到的单来源连接上限 |
+| `HONEYPOT_RELAY_IDLE_TIMEOUT_SECONDS` | 300 | 任一方向无数据时的超时 |
+| `HONEYPOT_RELAY_MAX_CONNECTION_SECONDS` | 3600 | 单连接的绝对寿命 |
+| `HONEYPOT_RELAY_MAX_BYTES_PER_DIRECTION` | 67108864 | 单方向最多转发的字节数（64 MiB） |
+| `HONEYPOT_WEB_MAX_CONNECTIONS` | 32 | Web 诱饵并发 HTTP 连接上限 |
+| `HONEYPOT_WEB_IDLE_TIMEOUT_SECONDS` | 30 | Web 请求/socket 空闲超时 |
+| `HONEYPOT_WEB_MAX_CONNECTION_SECONDS` | 120 | Web 连接绝对寿命 |
+
+这些值是资源边界，不是带宽或 DDoS 清洗保证。提高上限时必须同步检查容器
+`pids_limit`、内存、网关容量和日志速率。
 
 ## 宿主网关配置
 
@@ -112,6 +134,12 @@ SSH 密码是可见的诱饵值 `highwall-decoy-only`，可以在构建前通过
 
 请求命中静态 `presets` 时仍由网关本地响应；其余路径只发往这个专用后端。
 后端不可用时返回 `502` 或 `504`，不会回落到业务 `upstream`。
+
+高交互后端应使用独立的可注册域，不要复用生产域或生产子域。网关会剥离
+CSP、HSTS、CORS、`Clear-Site-Data`、`NEL`/`Report-To`、`Permissions-Policy`、
+`X-Frame-Options` 等会改变浏览器来源状态的头；`Set-Cookie` 会删除 `Domain`
+属性并拒绝 `__Host-`/`__Secure-` 前缀，`Location` 只保留相对地址。不要让后端
+与真实应用共享域名或 Cookie 名称空间。
 
 浏览器或测试客户端必须显式发送允许的 Host：
 
@@ -183,8 +211,10 @@ docker network connect highwall-honeypot-ssh <gateway-container>
 ## 验收
 
 `verify.py` 只使用 Python 标准库。它会检查 Web 登录与会话流、OpenSSH banner、
-转发端口是否只绑定回环、所有容器是否无法访问公网，以及 SSH、Web 和两个转发
-容器之间是否隔离。
+转发端口是否只绑定回环、所有容器是否无法访问公网、云元数据地址、宿主 Docker
+API 端口和另一诱饵网络，以及 SSH、Web 和两个转发容器之间是否隔离。
+SSH 容器没有 Python 时使用镜像内的 `nc` 做出网探测；`nc` 不存在时该项会明确
+标记为跳过，不能视为完整通过。跨容器探测优先使用 `nc`，其次使用 `wget`。
 
 ```powershell
 python verify.py --docker require
@@ -198,9 +228,11 @@ python verify.py --docker require
 [PASS] ssh/banner: SSH-2.0-OpenSSH_...
 [PASS] docker/services: containers are running
 [PASS] docker/loopback: ssh-forward=127.0.0.1:..., web-forward=127.0.0.1:...
-[PASS] docker/web-egress: web container has no public egress
-[PASS] docker/forwarder-egress: ssh-forward, web-forward have no public egress
+[PASS] docker/web-egress: web container cannot reach public, metadata, or host API endpoints
+[PASS] docker/forwarder-egress: ssh-forward, web-forward cannot reach public, metadata, or host API endpoints
+[PASS] docker/ssh-egress: SSH container cannot reach public, metadata, or host API endpoints
 [PASS] docker/cross-network: SSH and web containers are network-isolated
+[PASS] docker/web-cross-network: web container cannot reach the SSH decoy network
 [PASS] docker/forwarder-isolation: forwarders cannot reach the other decoy network
 ```
 
@@ -239,6 +271,10 @@ docker compose up -d
 事先记录时间源、收集器、保留期、访问路径和哈希校验方式，并从隔离主机导出，
 不要在诱饵容器内执行取证工具。
 
+诱饵 Web 日志中的 `peer` 通常是转发器容器地址，不是攻击者真实来源；
+`declared_xff` 是客户端可伪造的声明值，且会经过字符清洗和长度截断。需要真实
+来源时应依赖网关入口日志、网络流量镜像和受保护的外部收集器。
+
 ### 常见问题
 
 - HighWall 返回 `502`/`504`：Web 诱饵没启动、端口不对或超时。
@@ -248,13 +284,17 @@ docker compose up -d
   网络不能直接发布端口，端口必须经过转发容器。
 - 转发容器反复退出：`docker compose logs ssh-forward web-forward`；它会在无法
   删除默认路由或无法降权时主动退出，不要绕过这个失败。
-- `verify.py` 报公网可达：立即停止部署，先修正 Docker 网络，不要继续收集交互。
+- `verify.py` 报公网、云元数据、宿主 API 或跨诱饵网络可达：立即停止部署，先修正
+  Docker 网络和宿主防火墙，不要继续收集交互。
 
 ## 安全、隐私与法务边界
 
 - 只在你拥有或获得明确授权的网络上部署。
 - 高交互诱饵是**可被攻陷资产**。必须假设攻击者能登录、上传文件、运行工具，
   并尝试容器或内核逃逸。
+- 高交互入口必须使用独立可注册域，不能与生产域或生产子域共用；网关的响应头
+  清洗只降低浏览器状态污染面，不能替代域名隔离。不同端口不是边界：Cookie 不按
+  端口隔离，必须使用独立域或至少独立主机。
 - 不要把 Docker socket、宿主根目录、云元数据代理、生产密钥或真实客户数据
   挂载进诱饵。
 - 保持 Docker、内核和容器运行时为最新版本。容器内 root 不是宿主 root，
@@ -266,6 +306,14 @@ docker compose up -d
 - 不反制、不反向连接、不投放恶意代码、不收集授权范围外的数据。HighWall 和
   L4Wall 本身不执行不可信内容，也不提供反制功能。
 - 不要把诱饵端口直接发布到公网。应放在网关之后，限制来源，并隔离管理面。
+
+### 被攻陷后的处置
+
+1. 先在网关层撤销对应 listener 或切断转发端口，停止继续交互；保留网关审计、网络流和容器日志。
+2. 不要在已攻陷容器内执行清理或取证工具。先在宿主/平台层隔离并快照，导出证据后删除容器。
+3. 检查容器逃逸和横向移动迹象：宿主进程、异常网络连接、Docker socket、云元数据、宿主 API 和凭据访问。
+4. 轮换可能在诱饵中暴露的凭据、令牌和证书；如果误用了共享域，立即失效相关 Cookie、会话和缓存。
+5. 从干净镜像和已知配置重新创建诱饵，重新运行 `python verify.py --docker require`，再恢复流量。
 
 ## “完整仿真”的代价
 
@@ -284,7 +332,7 @@ docker compose up -d
 | 形态 | 基础设施 | 工程与运维 | 主要风险 |
 |---|---|---|---|
 | 静态模板 | 几乎可忽略 | 小时级 | 易被指纹识别，交互有限 |
-| 本目录的隔离高交互闭环 | 约 1.5 vCPU / 512 MiB，另加网关 | 每个服务数天 | 诱饵被攻陷、容器逃逸 |
+| 本目录的隔离高交互闭环 | 约 1.5 vCPU / 640 MiB，另加网关 | 每个服务数天 | 诱饵被攻陷、容器逃逸 |
 | 完整业务栈复制 | 4–16+ vCPU、8–32+ GiB 内存，另加数据库和存储 | 数周到数月，之后持续维护 | 成本高、数据泄漏、环境漂移、法务暴露 |
 
 硬件通常不是最大成本。真正昂贵的是可信的假数据、隔离工程、取证准备、持续补丁，

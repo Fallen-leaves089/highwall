@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from email.utils import formatdate
 from http import HTTPStatus
 from typing import Any, Iterable
+from urllib.parse import urlsplit
 
 from .audit import AuditRecord
 from .config import Config, HoneypotBackendConfig, HoneypotRoute, UpstreamConfig
@@ -105,6 +106,37 @@ _RESPONSE_STRIPPED = _HOP_BY_HOP | {
     "x-frame-options",
     "x-powered-by",
     "x-request-id",
+}
+_HONEYPOT_BACKEND_STRIPPED = {
+    "access-control-allow-credentials",
+    "access-control-allow-headers",
+    "access-control-allow-methods",
+    "access-control-allow-origin",
+    "access-control-expose-headers",
+    "access-control-max-age",
+    "alt-svc",
+    "clear-site-data",
+    "content-security-policy",
+    "content-security-policy-report-only",
+    "cross-origin-embedder-policy",
+    "cross-origin-opener-policy",
+    "cross-origin-resource-policy",
+    "expect-ct",
+    "nel",
+    "origin-agent-cluster",
+    "origin-trial",
+    "permissions-policy",
+    "public-key-pins",
+    "referrer-policy",
+    "refresh",
+    "report-to",
+    "reporting-endpoints",
+    "service-worker-allowed",
+    "set-cookie2",
+    "strict-transport-security",
+    "x-content-type-options",
+    "x-frame-options",
+    "x-permitted-cross-domain-policies",
 }
 _TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
 _CIRCUIT_STATE_CODES = {"closed": 0.0, "half_open": 1.0, "open": 2.0}
@@ -209,6 +241,41 @@ def _valid_header_value(value: str) -> bool:
         if code == 0x7F or (code < 0x20 and ch != "\t") or code > 0xFF:
             return False
     return True
+
+
+def _sanitize_honeypot_cookie(value: str) -> str | None:
+    if any(ord(ch) == 0x7F or ord(ch) < 0x20 for ch in value):
+        return None
+    parts = [part.strip() for part in value.split(";")]
+    raw_cookie = parts[0]
+    if "=" not in raw_cookie:
+        return None
+    raw_name, cookie_value = raw_cookie.split("=", 1)
+    name = raw_name.strip()
+    if not _TOKEN_RE.fullmatch(name):
+        return None
+    if name.startswith(("__Host-", "__Secure-")):
+        return None
+    kept = [f"{name}={cookie_value}"]
+    for attribute in parts[1:]:
+        if not attribute:
+            continue
+        if attribute.split("=", 1)[0].strip().lower() == "domain":
+            continue
+        kept.append(attribute)
+    return "; ".join(kept)
+
+
+def _sanitize_honeypot_location(value: str) -> str | None:
+    if not value or any(ord(ch) == 0x7F or ord(ch) < 0x20 or ch == "\\" for ch in value):
+        return None
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        return None
+    if parsed.scheme or parsed.netloc:
+        return None
+    return value
 
 
 def _safe_reason(reason: str, status: int) -> str:
@@ -488,6 +555,18 @@ def _honeypot_backend_headers(
             continue
         if not _valid_header_name(name) or not _valid_header_value(value):
             raise BadGateway("honeypot backend returned an unsafe header", rule_id="HW-HONEY-BACKEND-1005")
+        if lower in _HONEYPOT_BACKEND_STRIPPED:
+            continue
+        if lower == "set-cookie":
+            cookie = _sanitize_honeypot_cookie(value)
+            if cookie is not None:
+                headers.append((name, cookie))
+            continue
+        if lower == "location":
+            location = _sanitize_honeypot_location(value)
+            if location is not None:
+                headers.append((name, location))
+            continue
         headers.append((name, value))
     if response.status == 204:
         content_length = None

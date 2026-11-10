@@ -155,7 +155,8 @@ HighWall 只做入口、Host/来源控制和资源限制，真实诱饵应用运
 - 前端仍执行严格 HTTP 解析、Host 白名单、客户端 CIDR ACL、封禁、限速、连接/在途槽位、请求体上限和审计失败关闭。
 - 高交互端口不套用业务 `allowed_methods`、路径前缀、Content-Type、Origin、只读、WAF、DLP、完整性和普通路由策略；否则登录、上传和真实应用交互会被业务规则提前破坏。
 - 方法、路径、查询串、请求体和除逐跳头外的 Header 会转发到后端；`Host`、`X-Forwarded-For`、`X-Forwarded-Host` 和 `X-Forwarded-Proto` 由网关重写。`Authorization`、`Cookie` 等业务值不会被审计记录。
-- 后端响应保留 `Server`、`Set-Cookie`、CSP、`X-Powered-By` 等头，但会校验头名/头值、拒绝 CRLF 和歧义 framing，并重建 `Content-Length`。后端没有 `Server` 时使用 `backend.server_header`。
+- 后端响应会保留 `Server`、`X-Powered-By` 和自定义业务头以维持诱饵真实性，但网关会剥离会改变浏览器来源状态或固定安全策略的头，包括 CSP/CSP-Report-Only、HSTS、CORS、`Clear-Site-Data`、`NEL`/`Report-To`、`Permissions-Policy`、`X-Frame-Options`、`X-Content-Type-Options`、`Refresh` 和 `Alt-Svc`。`Set-Cookie` 只保留同源普通 Cookie，删除 `Domain` 属性并拒绝 `__Host-`/`__Secure-` 前缀；`Location` 只保留相对地址，丢弃绝对 URL、协议相对 URL、控制字符和反斜杠。
+- 高交互蜜罐必须使用独立的可注册域，不要复用生产域或生产子域。不同端口不是隔离边界：Cookie 不按端口隔离，浏览器可能把生产 Cookie 发送到同主机的蜜罐端口。响应头清洗降低污染面，但不能替代域名隔离；同源 Cookie 名称冲突、浏览器缓存和同站规则仍需独立域边界。
 - `policy.max_body_bytes`、`backend.max_response_bytes` 和后端超时仍然生效。需要上传或长轮询时，必须显式提高这些上限并重新评估内存和连接预算。
 - `ban_seconds` 的“首击封禁”只作用于静态诱饵命中；高交互请求不会因为一次交互自动封禁来源，否则会切断持续调查。已有的蜜罐封禁仍会拒绝所有端口。
 - 高交互后端是**可被攻陷资产**。网关不执行它的内容，但不能修复后端应用漏洞、容器逃逸或横向移动；必须按 [`deploy/honeypot/README.md`](../deploy/honeypot/README.md) 的隔离、资源限制、重置和取证要求部署。
@@ -198,7 +199,7 @@ HighWall 只做入口、Host/来源控制和资源限制，真实诱饵应用运
 - 审计最小化：只记录方法、路径（不含查询串）、来源、状态、规则 ID、耗时和字节数；不记录请求体、Header、Cookie、Authorization 或响应体。
 - 有界资源：配置路由数、单路由 Body、Header 数、延迟和启动时内存均有上限。
 - 封禁有界：首击封禁使用同样有容量上限的内存表，重启即清空；不会写入持久状态。
-- 可攻陷资产：高交互后端不是可信计算基。必须只读、无出网、无 Docker socket、无宿主挂载、资源受限且可重建；网关的隔离不能替代后端补丁和容器安全。
+- 可攻陷资产：高交互后端不是可信计算基。必须只读、无出网、无 Docker socket、无宿主挂载、资源受限且可重建；响应头清洗、独立域名和网关隔离不能替代后端补丁、容器安全与宿主防护。
 - 默认关闭：未启用时，认证、WAF、路径拒绝等原有失败关闭行为不变。
 
 ## 4. 指标与审计
@@ -232,7 +233,7 @@ HighWall 只做入口、Host/来源控制和资源限制，真实诱饵应用运
 4. 在共享 NAT、办公网或反向代理后面启用首击封禁前，先用 `ban_seconds=0` 观察 `honeypot_hits_total` 和审计事件，确认没有正常用户误触。
 5. 需要拖延时从小值开始，例如 250–1000 ms。延迟会占用全局在途槽位，不能替代速率限制或 DDoS 清洗。
 6. 不要依赖蜜罐发现所有扫描；它只覆盖显式配置的路径，攻击者可以通过指纹、路径字典差异或直接访问真实端点绕过。
-7. 默认静态模式不采集请求 payload，也不执行不可信内容。需要高交互时，优先使用 [`deploy/honeypot`](../deploy/honeypot/README.md) 这类隔离容器，把后端限制在回环/私网、无公网出网、无宿主挂载、无 Docker socket，并准备快照和重置流程。
+7. 默认静态模式不采集请求 payload，也不执行不可信内容。需要高交互时，优先使用 [`deploy/honeypot`](../deploy/honeypot/README.md) 这类隔离容器，把后端限制在回环/私网、无公网出网、无宿主挂载、无 Docker socket，并准备快照和重置流程。高交互入口应使用独立可注册域，不能借用生产域或生产子域。
 8. 高交互端口不要直接暴露公网；前端只做入口控制和资源限制，后端应用漏洞、容器逃逸、横向移动和证据保全仍由独立部署负责。调查期间通常保持 `ban_seconds=0`，避免一次交互后切断持续观察。
 9. 诱导性 `server_header`、`host_header` 只能降低明显的产品指纹，不构成安全边界；不要把它们当作规避检测的保证。
 
