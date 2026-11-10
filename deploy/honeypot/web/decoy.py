@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import http.client
+import ipaddress
 import json
 import os
 import secrets
@@ -25,6 +26,17 @@ http.client._MAXLINE = MAX_HEADER_LINE_BYTES
 http.client._MAXHEADERS = MAX_HEADERS
 BaseHTTPRequestHandler.max_line_length = MAX_HEADER_LINE_BYTES
 BaseHTTPRequestHandler.max_headers = MAX_HEADERS
+
+
+def _listen_host() -> str:
+    raw = os.environ.get("LISTEN_HOST", "127.0.0.1").strip()
+    try:
+        address = ipaddress.ip_address(raw)
+    except ValueError as exc:
+        raise SystemExit("LISTEN_HOST must be an IPv4 literal") from exc
+    if address.version != 4:
+        raise SystemExit("LISTEN_HOST must be an IPv4 literal")
+    return str(address)
 
 
 def _positive_int(name: str, default: int) -> int:
@@ -306,11 +318,12 @@ class BoundedThreadingHTTPServer(ThreadingHTTPServer):
 
 def main() -> None:
     port = int(os.environ.get("DECOY_PORT", "8080"))
+    listen_host = _listen_host()
     max_connections = _positive_int("DECOY_MAX_CONNECTIONS", MAX_CONNECTIONS)
     idle_timeout = _positive_float("DECOY_IDLE_TIMEOUT_SECONDS", IDLE_TIMEOUT_SECONDS)
     max_connection_seconds = _positive_float("DECOY_MAX_CONNECTION_SECONDS", MAX_CONNECTION_SECONDS)
     server = BoundedThreadingHTTPServer(
-        ("0.0.0.0", port),
+        (listen_host, port),
         DecoyHandler,
         max_connections=max_connections,
         idle_timeout=idle_timeout,
@@ -318,7 +331,7 @@ def main() -> None:
     )
     server.daemon_threads = True
     sys.stdout.write(
-        f"decoy web listening on {port} max_connections={max_connections} "
+        f"decoy web listening on {listen_host}:{port} max_connections={max_connections} "
         f"idle={idle_timeout}s total={max_connection_seconds}s\n"
     )
     sys.stdout.flush()
