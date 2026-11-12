@@ -8,6 +8,10 @@ fn example_config_is_valid_and_documents_bounded_defaults() {
     let config = AppConfig::load(path).expect("config.example.json must remain loadable");
     assert_eq!(config.limits.h2_idle_timeout_ms, 60_000);
     assert_eq!(config.agent.max_entries, 16_384);
+    assert_eq!(config.bans.violation_threshold, 500);
+    assert_eq!(config.bans.violation_window_seconds, 60);
+    assert_eq!(config.bans.response_violation_threshold, 500);
+    assert_eq!(config.bans.response_violation_window_seconds, 300);
     assert!(config.tls.is_none());
     assert!(config.quic.is_none());
 }

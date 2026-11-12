@@ -15,7 +15,32 @@ Rust 原生数据面，采用 B+D-4 架构：在同一个模块化网关内完�
 - H1 只接受单个合法 `Transfer-Encoding: chunked`，解块后重新生成长度 framing；重复或组合 TE、TE+CL 和请求 trailers 会被拒绝。单个 chunked 不会被伪装成“全部拒绝”。
 - Agent 检测状态按来源和全局上限约束，不会因随机来源或 UA 轮换无限增长。
 - 审计启用时默认失败关闭；启动检查会初始化审计写入路径。
-- 自动封禁默认只作用于精确 IP，并带 TTL 和容量上限。
+- 自动封禁默认只作用于精确 IP，并带 TTL 和容量上限。默认以人工处置为主：普通违规累计 500 次/60 秒、响应违规累计 500 次/300 秒才会自动封禁，封禁 TTL 默认 300 秒。
+
+## 人工处置与自动封禁
+
+原生核心默认用于人工研判，不以低阈值自动封禁来源。`bans.enabled=true` 时，达到高阈值才会自动拒绝来源；`bans.enabled=false` 可完全关闭自动封禁，但 WAF/DLP 对单次请求的拒绝仍然保留。需要人工阻断来源时，使用宿主防火墙或上游 ACL，而不是依赖进程内封禁状态。
+
+默认阈值和调整方式：
+
+```json
+{
+  "bans": {
+    "enabled": true,
+    "ttl_seconds": 300,
+    "max_ttl_seconds": 900,
+    "violation_threshold": 500,
+    "violation_window_seconds": 60,
+    "response_violation_threshold": 500,
+    "response_violation_window_seconds": 300
+  }
+}
+```
+
+1. 保持人工处置时，不改默认阈值，按审计和告警人工复核。
+2. 完全关闭自动封禁时，把 `bans.enabled` 设为 `false`，并保留 WAF/DLP 的按请求拦截。
+3. 需要更严格策略时，先观察 `violation_threshold` 相关审计和误报，再同时调整普通违规与响应违规阈值；不要只把单侧阈值降到个位数。
+4. 自动封禁状态只在内存中，按 TTL 到期或进程重启清空；持久封禁使用防火墙或上游访问控制。
 
 ## 构建与验证
 

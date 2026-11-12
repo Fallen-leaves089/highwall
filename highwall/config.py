@@ -1438,7 +1438,7 @@ def _parse_rate_limit(value: Any) -> RateLimitConfig:
         global_burst=global_burst if enabled else 1,
         max_tracked_clients=_int(raw.get("max_tracked_clients"), f"{where}.max_tracked_clients", 10000, 16, 1000000),
         client_idle_ttl=_number(raw.get("client_idle_ttl"), f"{where}.client_idle_ttl", 300.0, 1.0, 86400.0),
-        auto_ban_threshold=_int(raw.get("auto_ban_threshold"), f"{where}.auto_ban_threshold", 20, 0, 100000),
+        auto_ban_threshold=_int(raw.get("auto_ban_threshold"), f"{where}.auto_ban_threshold", 500, 0, 100000),
         auto_ban_window=_number(raw.get("auto_ban_window"), f"{where}.auto_ban_window", 60.0, 1.0, 86400.0),
         auto_ban_seconds=_number(raw.get("auto_ban_seconds"), f"{where}.auto_ban_seconds", 300.0, 1.0, 604800.0),
         max_ban_entries=_int(raw.get("max_ban_entries"), f"{where}.max_ban_entries", 10000, 16, 1000000),

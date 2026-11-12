@@ -127,7 +127,7 @@ python -m highwall init `
 - `server.max_inflight_requests` 设置全局在途上限，建议小于 `max_connections`，否则不会形成额外背压；超限返回 503；
 - `upstream.circuit_breaker` 的 `failure_threshold`、`window`、`open_seconds` 和 `half_open_max_requests` 按上游容量和恢复时间调整；熔断期间会主动返回 503；
 - `server.max_connections_per_ip` 约束单来源并发；反向代理/LB 来源若在 `trusted_proxies` 中则不按 TCP 来源计数；
-- `rate_limit.auto_ban_threshold` 设为 `0` 可关闭“错误累计”自动封禁；它不会关闭 `threat_detection.agent_mode=block` 的定向封禁。启用时按 NAT/共享出口规模调整阈值、窗口和封禁时长；
+- `rate_limit.auto_ban_threshold` 默认 `500/60` 秒，封禁 `300` 秒；设为 `0` 可关闭“错误累计”自动封禁。它不会关闭 `threat_detection.agent_mode=block` 的定向封禁。启用时按 NAT/共享出口规模调整阈值、窗口和封禁时长；
 - `threat_detection` 默认关闭。先以 `mode=monitor` 观察 `threat_suspected` / `threat_confirmed`，再启用 `tarpit`；默认 `containment_seconds=300` 是疑似限速窗口，`confirmed_containment_seconds=900` 是确认后的慢速窗口。`per_actor_tarpit_slots` 和 `global_tarpit_slots` 要与线程、连接数和业务容量匹配；`agent_mode=block` 按来源 IP 封禁，`throttle` 只限制当前指纹/请求形状，轮换 UA 可能重新获得干净配额；
 - `threat_detection.offender_path` 指向受 ACL 保护的可写数据目录，例如 `C:\ProgramData\HighWall\data\offenders.json`；不要放在只读程序目录、WSL 可写目录或与审计日志相同的公开目录。标记有 TTL 和容量上限，不是永久封禁源；
 - `ddos_detection` 默认关闭。启用后聚合 L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误；默认需要至少 2 类信号，持续 300 秒升级告警，无信号 30 秒恢复。它不识别 L3/L4 来源，也不做带宽清洗；
@@ -135,6 +135,17 @@ python -m highwall init `
 - `audit.path` 指向受保护的数据目录（例如相对配置目录的 `data\\audit.jsonl`），不要与只读 `config.json` 同级写入；
 - `audit.path_mode` 默认 `redact`，会解码并脱敏敏感路径段和参数；`hash` 适合只做关联分析，`exact` 只应在明确接受路径进入审计日志后启用；
 - `admin.enabled` 默认保持 `false`，需要时再打开。
+
+### 人工处置与自动封禁
+
+默认配置以人工研判为主，不依赖低阈值自动封禁。`policy.waf_mode=block` 只拒绝当前已命中的恶意请求；`threat_detection.agent_mode=score` 只记录和加分。来源 IP 的自动封禁只作为极高阈值兜底：主程序默认累计 500 次协议或策略错误/60 秒才封禁 300 秒，原生核心默认普通违规 500 次/60 秒、响应违规 500 次/300 秒才封禁。
+
+变更步骤：
+
+1. **保持人工处置**：默认无需修改。按审计和告警人工研判；需要阻断来源时使用宿主防火墙或上游 ACL/负载均衡策略。应用管理面提供查询和受保护的配置重载，但不提供封禁写接口。
+2. **完全关闭错误累计自动封禁**：把 `rate_limit.auto_ban_threshold` 设为 `0`，重新运行 `highwall check` 和 `highwall diff`，确认只出现预期的热加载变化。若要同时关闭定向封禁，还需要检查并删除 `threat_detection.agent_mode=block`。
+3. **调整阈值**：先观察 `auto_bans_total`、`parse_errors_total`、`waf_blocked_total` 和审计中的 `client_ip`；共享 NAT 或大出口应继续提高阈值，只有确认误报率可接受后才降低。把 `auto_ban_threshold`、`auto_ban_window`、`auto_ban_seconds` 一起评审，避免只改一个字段。
+4. **启用自动处置**：确认误报率可接受后，才把 `threat_detection.agent_mode` 改为 `block` 或 `throttle`，并用 `highwall diff` 和回滚配置复核；自动封禁只在内存中，重启会清空，持久封禁必须交给防火墙或上游访问控制。
 
 先验证：
 

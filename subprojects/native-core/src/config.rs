@@ -536,9 +536,9 @@ impl Default for BanConfig {
             ttl_seconds: 300,
             max_ttl_seconds: 900,
             max_entries: 4096,
-            violation_threshold: 5,
+            violation_threshold: 500,
             violation_window_seconds: 60,
-            response_violation_threshold: 10,
+            response_violation_threshold: 500,
             response_violation_window_seconds: 300,
         }
     }
@@ -1248,6 +1248,8 @@ mod tests {
             .allowed_methods
             .iter()
             .any(|value| value == "CONNECT"));
+        assert_eq!(config.bans.violation_threshold, 500);
+        assert_eq!(config.bans.response_violation_threshold, 500);
         let mut unsafe_config = config;
         unsafe_config.listen.host = "0.0.0.0".parse().unwrap();
         assert!(unsafe_config.validate().is_err());
