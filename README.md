@@ -224,6 +224,24 @@ DDoS 告警应接入 NOC/值班系统，并在 5 分钟窗口内完成：确认 
 
 `threat_detection.agent_mode` 默认 `score`：请求呈现明显的脚本/Agent 特征（自动化 UA、缺少浏览器头、无 Cookie、节奏规律、单路径聚焦或同路径参数扫描）时只加分。企业需要直接处置时，只改这一行：`block` 按来源 IP 封禁，`throttle` 按当前指纹/请求形状限流；该开关不依赖 `rate_limit.auto_ban_threshold`。`throttle` 不是 IP 级封禁，轮换 UA 或请求形状可能重新获得干净配额；需要强处置明显 Agent 时选 `block`。`agent_min_signals` 默认 3，`agent_score` 默认 30。
 
+### 人工处置与自动封禁
+
+默认配置以人工研判为主，不使用低阈值自动封禁：
+
+- `policy.waf_mode=block` 只拒绝当前已命中的恶意请求，不会因为单次命中封禁来源 IP；
+- `threat_detection.agent_mode=score` 只加分和审计；`highwall init` 生成的配置默认关闭 `threat_detection`；
+- `rate_limit.auto_ban_threshold` 默认 `500`，即在 `auto_ban_window=60` 秒内累计 500 次协议或策略错误才自动拒绝来源，`auto_ban_seconds=300` 后自动恢复；正常业务、共享 NAT 和监控探针不应接近该阈值；
+- 原生核心默认普通违规 `500/60` 秒、响应违规 `500/300` 秒，达到后才自动封来源。
+
+怎么改、怎么做：
+
+1. **保持人工处置**：默认无需改动。按审计和告警人工研判，需要阻断来源时使用宿主防火墙或上游 ACL/负载均衡策略；应用管理面提供查询和受保护的配置重载，但不提供封禁写接口。
+2. **完全关闭错误累计自动封禁**：将 `rate_limit.auto_ban_threshold` 设为 `0`。这不会关闭 `agent_mode=block` 的定向封禁，也不会关闭 WAF 单请求拦截。
+3. **调整阈值**：先观察 `auto_bans_total`、`parse_errors_total`、`waf_blocked_total` 和审计中的 `client_ip`，再按 NAT/出口规模修改 `auto_ban_threshold`、`auto_ban_window` 和 `auto_ban_seconds`；不要为了“更快封禁”把阈值降到个位数。
+4. **启用自动处置**：只有确认误报率可接受后，才把 `threat_detection.agent_mode` 改为 `block` 或 `throttle`，并用 `highwall diff` 复核配置变化。
+
+自动封禁状态只在内存中，重启会清空；需要持久封禁时使用主机防火墙或上游访问控制。
+
 把以下关键字段合并到现有配置中（片段不能单独作为完整配置）：
 
 ```json
@@ -511,7 +529,7 @@ docker run --rm highwall-native-core:dev --version
 - `policy.response_scan_mode` / `response_scan_max_bytes` / `response_scan_headers`：上游响应的秘密/调试信息扫描，分别支持 `off`、`detect`、`block`；只扫描有界前缀，默认 1 MiB。媒体类型不再作为免扫条件，并尝试 UTF-8/Latin-1/UTF-16 解码；响应头默认参与扫描，`Set-Cookie` 固定排除。
 - `server.max_connections_per_ip`：单个来源 IP 的并发连接上限；`0` 关闭限制，可信代理来源不计入。它不能替代总连接上限。
 - `policy.routes[].max_concurrent`：路由级在途请求上限，`0` 表示关闭，不能超过 `server.max_connections`；超限返回 503 和 `Retry-After`。
-- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`：在时间窗内累计协议或策略错误后临时拒绝该来源；`threshold=0` 关闭这条“错误累计”自动封禁路径，但不关闭 `threat_detection.agent_mode=block` 的定向封禁。封禁状态只在内存中，重启即清空。
+- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`：在时间窗内累计协议或策略错误后临时拒绝该来源；默认 `500/60` 秒，封禁 `300` 秒。`threshold=0` 关闭这条“错误累计”自动封禁路径，但不关闭 `threat_detection.agent_mode=block` 的定向封禁。封禁状态只在内存中，重启即清空。
 - `threat_detection`：多信号攻击者指纹、两阶段确认、慢速槽位和持久标记。`enabled` 默认关闭；建议先 `mode=monitor`，再切 `tarpit`。`agent_mode` 默认 `score`（只加分），可改为 `block` 或 `throttle` 来直接处置明显自动化：`block` 封来源 IP，`throttle` 只限制当前指纹，换请求形状可能绕过限速。`containment_seconds=300` 是疑似窗口，`confirmed_containment_seconds=900` 是确认后的持续慢速窗口；`offender_path` 必须是受保护的可写路径。
 - `ddos_detection`：L7 请求速率、拒绝比例、连接饱和度、TLS 失败和上游错误的多信号聚合；`escalation_seconds=300` 表示持续 5 分钟才升级告警，`recovery_seconds` 控制恢复事件。它不会自动清洗带宽型 DDoS。
 - `alerting`：异步 Webhook 告警。`enabled=true` 时 `HIGHWALL_ALERT_WEBHOOK` 必须存在且默认为 HTTPS；可选 `HIGHWALL_ALERT_TOKEN`。`include_client_ip` 默认 `false`，`allow_http` 默认 `false`。队列满会丢弃并增加 `alert_dropped_total`，不会阻塞请求。

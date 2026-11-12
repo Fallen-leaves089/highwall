@@ -94,7 +94,7 @@
     "global_burst": 2000,
     "max_tracked_clients": 10000,
     "client_idle_ttl": 300.0,
-    "auto_ban_threshold": 30,
+    "auto_ban_threshold": 500,
     "auto_ban_window": 60.0,
     "auto_ban_seconds": 300.0,
     "max_ban_entries": 10000

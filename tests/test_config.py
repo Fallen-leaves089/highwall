@@ -44,7 +44,9 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(config.audit.path_mode, "redact")
         self.assertEqual(config.audit.on_write_failure, "fail_closed")
         self.assertEqual(config.threat_detection.agent_mode, "score")
-        self.assertEqual(config.rate_limit.auto_ban_threshold, 20)
+        self.assertEqual(config.rate_limit.auto_ban_threshold, 500)
+        self.assertEqual(config.rate_limit.auto_ban_window, 60.0)
+        self.assertEqual(config.rate_limit.auto_ban_seconds, 300.0)
 
     def test_audit_and_agent_modes_are_validated(self) -> None:
         cases = (

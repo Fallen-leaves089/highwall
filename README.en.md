@@ -222,6 +222,24 @@ Recommended rollout:
 
 `threat_detection.agent_mode` defaults to `score`: requests that look like obvious scripts or agents (automation user agent, missing browser headers, no cookies, regular timing, single-path focus, or query scanning on one path) only add score. To contain them in an enterprise deployment, change only this line: `block` bans the source IP, and `throttle` rate-limits the current fingerprint/request shape. This switch does not depend on `rate_limit.auto_ban_threshold`. `throttle` is not an IP-level ban: rotating the user agent or request shape can obtain a fresh quota, so use `block` when obvious agents need hard containment. `agent_min_signals` defaults to 3 and `agent_score` to 30.
 
+### Manual-first handling and automatic bans
+
+The default profile is manual-first and does not use low-threshold automatic source bans:
+
+- `policy.waf_mode=block` rejects the current malicious request only; a single hit does not ban the source IP;
+- `threat_detection.agent_mode=score` only adds score and audit evidence; `highwall init` disables `threat_detection` by default;
+- `rate_limit.auto_ban_threshold` defaults to `500`: only after 500 protocol or policy errors within `auto_ban_window=60` seconds is the source temporarily rejected, and it recovers after `auto_ban_seconds=300`; normal traffic, shared NAT, and monitoring probes should never approach this threshold;
+- the native core defaults to `500/60` seconds for ordinary violations and `500/300` seconds for response violations before an automatic source ban.
+
+How to change it:
+
+1. **Keep manual handling**: no configuration change is required. Investigate audits and alerts manually, and use host firewall or upstream ACL/load-balancer policy when a source must be blocked. The application admin surface provides query and protected reload endpoints but no ban-write API.
+2. **Disable error-count automatic bans**: set `rate_limit.auto_ban_threshold` to `0`. This does not disable targeted bans from `agent_mode=block` or per-request WAF blocking.
+3. **Tune the threshold**: observe `auto_bans_total`, `parse_errors_total`, `waf_blocked_total`, and `client_ip` in the audit log before changing `auto_ban_threshold`, `auto_ban_window`, or `auto_ban_seconds` for your NAT/egress scale; do not lower it to single digits merely to ban faster.
+4. **Enable automatic containment**: only after false-positive rates are acceptable, change `threat_detection.agent_mode` to `block` or `throttle` and verify the change with `highwall diff`.
+
+Automatic ban state is in memory and is cleared on restart. Use host firewall or upstream access control for persistent blocking.
+
 Merge these key fields into the existing configuration (this fragment is not a complete configuration):
 
 ```json
@@ -513,7 +531,7 @@ No native GHCR image is published in this snapshot, and the image was not built 
 - `policy.response_scan_mode` / `response_scan_max_bytes` / `response_scan_headers`: secret and debug-information scanning for upstream responses. Supports `off`, `detect`, and `block`; only a bounded prefix, 1 MiB by default, is scanned. Media types are not treated as an exemption, and decoding attempts cover UTF-8, Latin-1, and UTF-16. Response headers are scanned by default, with `Set-Cookie` always excluded.
 - `server.max_connections_per_ip`: concurrent connection limit for a single source IP; `0` disables it, and trusted-proxy sources are not counted. It does not replace the total connection limit.
 - `policy.routes[].max_concurrent`: route-level in-flight limit; `0` disables it, and it cannot exceed `server.max_connections`. Rejections return 503 with `Retry-After`.
-- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`: temporarily reject a source after protocol or policy errors accumulate within a time window; `threshold=0` disables this error-count path but does not disable targeted bans from `threat_detection.agent_mode=block`. Ban state is in memory only and is cleared on restart.
+- `rate_limit.auto_ban_threshold` / `auto_ban_window` / `auto_ban_seconds`: temporarily reject a source after protocol or policy errors accumulate within a time window; defaults are `500` errors per `60` seconds with a `300`-second ban. `threshold=0` disables this error-count path but does not disable targeted bans from `threat_detection.agent_mode=block`. Ban state is in memory only and is cleared on restart.
 - `threat_detection`: multi-signal fingerprints, two-stage confirmation, bounded slow slots, and persistent marks. Disabled by default; start with `mode=monitor`, then move to `tarpit`. `agent_mode` defaults to `score` (score only); set it to `block` or `throttle` to contain obvious automation directly. `block` bans the source IP; `throttle` limits only the current fingerprint and can be evaded by changing the request shape. `containment_seconds=300` is the suspected window, while `confirmed_containment_seconds=900` is the confirmed slow window. `offender_path` must be a protected writable path.
 - `ddos_detection`: aggregates L7 request rate, rejection ratio, connection saturation, TLS failures, and upstream errors. `escalation_seconds=300` means a 5-minute sustained signal window before escalation; `recovery_seconds` controls recovery events. It does not scrub bandwidth-based DDoS.
 - `alerting`: asynchronous webhook delivery. When `enabled=true`, `HIGHWALL_ALERT_WEBHOOK` is required and defaults to HTTPS only; `HIGHWALL_ALERT_TOKEN` is optional. `include_client_ip` and `allow_http` both default to `false`. A full queue drops alerts and increments `alert_dropped_total` without blocking requests.

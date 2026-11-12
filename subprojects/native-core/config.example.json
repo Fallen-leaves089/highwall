@@ -128,9 +128,9 @@
     "ttl_seconds": 300,
     "max_ttl_seconds": 900,
     "max_entries": 4096,
-    "violation_threshold": 5,
+    "violation_threshold": 500,
     "violation_window_seconds": 60,
-    "response_violation_threshold": 10,
+    "response_violation_threshold": 500,
     "response_violation_window_seconds": 300
   }
 }
