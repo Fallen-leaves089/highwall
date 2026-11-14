@@ -26,10 +26,38 @@
 - `SHA256SUMS`、artifact attestation、镜像 provenance 和 cosign 签名可复验；
 - 发布说明没有把 Alpha、C3 或未验收能力写成生产可用。
 
+## 发布通道
+
+Release 工作流只接受带数字序号的预发布 tag，避免 `alpha`、`beta`、`rc` 之间的语义混淆：
+
+| Git tag | 通道 | Python 包版本 | GitHub Release |
+| --- | --- | --- | --- |
+| `v0.13.0-alpha.1` | Alpha | `0.13.0a1` | pre-release |
+| `v0.13.0-beta.2` | Beta | `0.13.0b2` | pre-release |
+| `v0.13.0-rc.1` | Release Candidate | `0.13.0rc1` | pre-release |
+| `v0.13.0` | Stable | `0.13.0` | 正式版 |
+
+L4Wall 和 L5Wall 使用相同规则，只把前缀分别换成 `l4wall-v` 和 `l5wall-v`。发布 job 从 tag 推导包版本，并在 runner 的工作副本中写入 Python PEP 440 版本和 Cargo 版本；不要求为每个预发布版本单独提交版本号修改。
+
+预发布 Release 必须设置 `--prerelease`，标题带 `Alpha`、`Beta` 或 `Release Candidate`。L5Wall 的 `latest` 镜像 tag 只在 Stable 通道移动。
+
+L4Wall 和 L5Wall 的 Stable Release 不应抢占仓库级 `latest`。GitHub 仍可能把新的稳定版本自动选为 `latest`，因此工作流会记录发布前的 `latest`，并在发布后显式恢复；恢复失败会让发布 job 失败。
+
+L5Wall 镜像名默认是 `ghcr.io/<owner>/l5wall`。临时验证仓库或 fork 必须设置仓库变量 `L5WALL_IMAGE` 指向独立包名，避免测试镜像写入正式 GHCR 包。
+
+`workflow_dispatch` 只能重跑位于当前工作流提交上的既有 tag；脚本会检查 `HEAD` 与 `GITHUB_SHA` 一致，防止用旧 tag 生成指向新提交的 provenance。
+
+## 供应链产物
+
+HighWall 原生 Release 会执行两次干净构建并比较二进制，生成 `.buildproof.json`；还会为每个目标生成 CycloneDX JSON SBOM。SBOM、构建证明、原生二进制、Python 包和 `THIRD_PARTY_NOTICES.md` 一起进入 `SHA256SUMS` 和 build provenance attestation。
+
+发布流程会在上传前执行 `gh attestation verify`。L5Wall 和 HighWall 镜像在签名后执行 `cosign verify`；`sign-image.yml` 在签名前验证镜像 provenance 来自本仓库的 `container.yml`。
+
 ## 工作流约束
 
 - GitHub Actions 只使用 GitHub 托管 runner，不配置自托管 runner。
 - 所有第三方 Action 固定到完整提交 SHA；仓库设置 `sha_pinning_required=true` 会拒绝未固定的引用。
+- 仓库只允许 GitHub 官方 Action，以及 `docker/setup-buildx-action`、`docker/login-action`、`docker/metadata-action`、`docker/build-push-action`、`sigstore/cosign-installer`。
 - `workflow_dispatch` 重跑只用于同一个既有 tag。发布 job 会更新已有 Release 资产，不应创建第二个同版本 Release。
 - 发布 job 的写权限必须保持最小化；验证 job 继续使用 `contents: read`。
 - 任何发布路径改动都应在临时公开仓库用真实 tag 验证，不直接拿正式 tag 试跑。

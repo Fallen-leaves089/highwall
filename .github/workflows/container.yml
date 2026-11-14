@@ -4,25 +4,74 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing HighWall tag to publish, for example v0.13.0-alpha.1"
+        required: true
+        type: string
 
 permissions:
-  attestations: write
   contents: read
-  id-token: write
-  packages: write
 
 concurrency:
-  group: container-${{ github.ref }}
+  group: container-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  classify:
+    name: Classify release channel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      package_version: ${{ steps.version.outputs.package_version }}
+      channel: ${{ steps.version.outputs.channel }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate tag and write outputs
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python scripts/release_channel.py "$RELEASE_TAG" --prefix v --github-output "$GITHUB_OUTPUT"
+
   publish:
     name: Publish GHCR image
+    needs: classify
     runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 30
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set Python package release version
+        env:
+          PACKAGE_VERSION: ${{ needs.classify.outputs.package_version }}
+        run: >-
+          python scripts/set_release_version.py python "$PACKAGE_VERSION"
+          --pyproject pyproject.toml
+          --module highwall/__init__.py
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -41,9 +90,8 @@ jobs:
         with:
           images: ${{ steps.image.outputs.name }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch
+            type=raw,value=${{ needs.classify.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.classify.outputs.tag }},enable=${{ needs.classify.outputs.channel == 'stable' }}
             type=sha
           flavor: |
             latest=false
@@ -62,7 +110,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            HIGHWALL_VERSION=${{ steps.meta.outputs.version }}
+            HIGHWALL_VERSION=${{ needs.classify.outputs.version }}
             HIGHWALL_REVISION=${{ github.sha }}
           provenance: mode=max
           sbom: true
@@ -76,6 +124,23 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push: true
 
+      - name: Verify image provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "oci://$IMAGE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/container.yml" \
+              --source-digest "$GITHUB_SHA"; then
+              exit 0
+            fi
+            echo "image attestation verification attempt $attempt failed; retrying"
+            sleep 6
+          done
+          exit 1
+
       - name: Install cosign
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:
@@ -85,3 +150,18 @@ jobs:
         env:
           IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE"
+
+      - name: Verify image signature
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}@${{ steps.build.outputs.digest }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if cosign verify "$IMAGE" \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/container.yml@refs/(heads|tags)/.+$" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com; then
+              exit 0
+            fi
+            echo "signature verification attempt $attempt failed; retrying"
+            sleep 6
+          done
+          exit 1

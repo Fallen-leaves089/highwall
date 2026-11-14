@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing L4Wall tag to publish, for example l4wall-v0.1.0"
+        description: "Existing L4Wall tag to publish, for example l4wall-v0.1.1-alpha.1"
         required: true
         type: string
 
@@ -21,8 +21,38 @@ env:
   PACKAGE_DIR: subprojects/l4wall
 
 jobs:
+  classify:
+    name: Classify release channel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      package_version: ${{ steps.version.outputs.package_version }}
+      channel: ${{ steps.version.outputs.channel }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      label: ${{ steps.version.outputs.label }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate tag and write outputs
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python scripts/release_channel.py "$RELEASE_TAG" --prefix l4wall-v --github-output "$GITHUB_OUTPUT"
+
   verify:
     name: Verify / Python ${{ matrix.python-version }}
+    needs: classify
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -56,7 +86,7 @@ jobs:
 
   release:
     name: Build packages and publish release
-    needs: verify
+    needs: [classify, verify]
     runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 15
@@ -69,22 +99,17 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Resolve tag and version
-        id: version
-        shell: bash
-        run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          case "$tag" in
-            l4wall-v*) ;;
-            *) echo "::error::expected an l4wall-v* tag, got $tag"; exit 1 ;;
-          esac
-          version="${tag#l4wall-v}"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+
+      - name: Set Python package release version
+        env:
+          PACKAGE_VERSION: ${{ needs.classify.outputs.package_version }}
+        run: >-
+          python scripts/set_release_version.py python "$PACKAGE_VERSION"
+          --pyproject "${{ env.PACKAGE_DIR }}/pyproject.toml"
+          --module "${{ env.PACKAGE_DIR }}/l4wall/__init__.py"
 
       - name: Build wheel and sdist
         run: |
@@ -93,20 +118,20 @@ jobs:
 
       - name: Check artifact names and contents
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          PACKAGE_VERSION: ${{ needs.classify.outputs.package_version }}
         run: |
-          test -f "dist/l4wall-${VERSION}-py3-none-any.whl"
-          test -f "dist/l4wall-${VERSION}.tar.gz"
+          test -f "dist/l4wall-${PACKAGE_VERSION}-py3-none-any.whl"
+          test -f "dist/l4wall-${PACKAGE_VERSION}.tar.gz"
           python "${{ env.PACKAGE_DIR }}/scripts/check_dist.py" dist
 
       - name: Install wheel and check CLI
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          PACKAGE_VERSION: ${{ needs.classify.outputs.package_version }}
         run: |
           python -m venv "$RUNNER_TEMP/l4wall-venv"
           "$RUNNER_TEMP/l4wall-venv/bin/pip" install --disable-pip-version-check dist/*.whl
           installed="$("$RUNNER_TEMP/l4wall-venv/bin/l4wall" --version | awk '{print $2}')"
-          test "$installed" = "$VERSION"
+          test "$installed" = "$PACKAGE_VERSION"
           "$RUNNER_TEMP/l4wall-venv/bin/l4wall" --version
           "$RUNNER_TEMP/l4wall-venv/bin/l4wall" check --config "${{ env.PACKAGE_DIR }}/config.example.json"
 
@@ -114,33 +139,89 @@ jobs:
         run: |
           cd dist
           sha256sum l4wall-*.whl l4wall-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Attest package provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: |
-            dist/*.whl
-            dist/*.tar.gz
+          subject-path: dist/*
+          push: true
+
+      - name: Verify package attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            verified=true
+            for artifact in dist/*; do
+              if ! gh attestation verify "$artifact" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/l4wall-release.yml" \
+                --source-digest "$GITHUB_SHA"; then
+                verified=false
+                break
+              fi
+            done
+            if [ "$verified" = true ]; then
+              exit 0
+            fi
+            echo "attestation verification attempt $attempt failed; retrying"
+            sleep 6
+          done
+          exit 1
 
       - name: Prepare release notes
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.classify.outputs.version }}
         run: |
           test "$(head -n 1 "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.md")" = "# L4Wall $VERSION"
           test "$(head -n 1 "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.en.md")" = "# L4Wall $VERSION"
           cp "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.md" release-notes.md
           printf '\n\n---\n\n' >> release-notes.md
           cat "${{ env.PACKAGE_DIR }}/docs/RELEASE-NOTES.en.md" >> release-notes.md
+          printf '\n\nBuild provenance attestations and `SHA256SUMS` are attached to the release.\n' >> release-notes.md
+
+      - name: Remember current latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null || true)"
+          if [ -n "$latest_json" ]; then
+            echo "PREVIOUS_LATEST_ID=$(jq -r '.id' <<<"$latest_json")" >> "$GITHUB_ENV"
+            echo "PREVIOUS_LATEST_TAG=$(jq -r '.tag_name' <<<"$latest_json")" >> "$GITHUB_ENV"
+          fi
 
       - name: Publish GitHub release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.classify.outputs.tag }}
+          VERSION: ${{ needs.classify.outputs.version }}
+          PRERELEASE: ${{ needs.classify.outputs.prerelease }}
+          LABEL: ${{ needs.classify.outputs.label }}
         run: |
+          title="L4Wall $VERSION"
+          flags=(--title "$title" --latest=false)
+          if [ "$PRERELEASE" = "true" ]; then
+            title="L4Wall $VERSION ($LABEL)"
+            flags=(--title "$title" --prerelease --latest=false)
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" dist/* --clobber
-            gh release edit "$TAG" --title "L4Wall $VERSION" --notes-file release-notes.md --latest=false
+            gh release edit "$TAG" --notes-file release-notes.md "${flags[@]}"
           else
-            gh release create "$TAG" dist/* --verify-tag --title "L4Wall $VERSION" --notes-file release-notes.md --latest=false
+            gh release create "$TAG" dist/* --verify-tag --notes-file release-notes.md "${flags[@]}"
           fi
+
+      - name: Preserve repository latest release
+        if: env.PREVIOUS_LATEST_ID != '' && env.PREVIOUS_LATEST_TAG != env.TAG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.classify.outputs.tag }}
+        run: |
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          if [ "$current" != "$PREVIOUS_LATEST_TAG" ]; then
+            echo "latest moved to $current; restoring $PREVIOUS_LATEST_TAG"
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${PREVIOUS_LATEST_ID}" -f make_latest=true >/dev/null
+          fi
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          test "$current" = "$PREVIOUS_LATEST_TAG"
