@@ -22,6 +22,7 @@
 
 - 目标提交上的 CI、CodeQL 和所需回归全部通过；
 - tag 格式与项目版本一致，且对应 release notes 已存在；
+- `THIRD_PARTY_NOTICES.md` 与当前 `Cargo.lock` 一致，并由 GitHub 托管 CI 重新生成比对；
 - `SHA256SUMS`、artifact attestation、镜像 provenance 和 cosign 签名可复验；
 - 发布说明没有把 Alpha、C3 或未验收能力写成生产可用。
 

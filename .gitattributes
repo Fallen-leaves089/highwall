@@ -4,5 +4,6 @@ Dockerfile.* text eol=lf
 .github/workflows/*.yml text eol=lf
 LICENSE text eol=lf
 NOTICE text eol=lf
+THIRD_PARTY_NOTICES.md text eol=lf
 subprojects/*/LICENSE text eol=lf
 subprojects/*/NOTICE text eol=lf

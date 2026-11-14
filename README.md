@@ -706,6 +706,6 @@ GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.15 上执行 Ruff、mypy�
 
 ## 开源许可
 
-HighWall 以 [Apache License 2.0](LICENSE) 开源发布，版权与归属信息见 [NOTICE](NOTICE)。你可以在许可证允许的范围内使用、修改、分发和商业部署；许可证包含明确的专利授权与专利反制条款，软件按现状提供，不附带任何担保。
+HighWall 以 [Apache License 2.0](LICENSE) 开源发布，版权与归属信息见 [NOTICE](NOTICE)。原生核心静态链接的 Rust 依赖、完整许可证文本和 vendored 补丁来源见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。你可以在许可证允许的范围内使用、修改、分发和商业部署；许可证包含明确的专利授权与专利反制条款，软件按现状提供，不附带任何担保。
 
 HighWall 不是“装上就安全”的魔法墙。它提供的是一组能被审计、能被测试、默认拒绝的 L7 不变量，真正的安全仍然来自纵深防御。

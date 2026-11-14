@@ -39,7 +39,7 @@ RUN apt-get update \
     && chmod 0750 /etc/highwall /var/lib/highwall
 
 COPY --from=builder /build/subprojects/native-core/target/release/highwall-native-core /usr/local/bin/highwall-native-core
-COPY LICENSE NOTICE /usr/share/highwall/
+COPY LICENSE NOTICE THIRD_PARTY_NOTICES.md /usr/share/highwall/
 
 ENV HIGHWALL_NATIVE_CONFIG=/etc/highwall/native.json
 

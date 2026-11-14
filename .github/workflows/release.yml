@@ -227,8 +227,9 @@ jobs:
           cp dist/*.whl dist/*.tar.gz release-assets/
           find native-assets -maxdepth 2 -type f -exec cp {} release-assets/ \;
           cp subprojects/native-core/config.example.json "release-assets/highwall-native-config-${{ steps.version.outputs.version }}.example.json"
+          cp THIRD_PARTY_NOTICES.md release-assets/
           cd release-assets
-          sha256sum highwall-*.whl highwall-*.tar.gz highwall-native-core-* highwall-native-config-* > SHA256SUMS
+          sha256sum highwall-*.whl highwall-*.tar.gz highwall-native-core-* highwall-native-config-* THIRD_PARTY_NOTICES.md > SHA256SUMS
           cat SHA256SUMS
 
       - name: Attest release asset provenance
@@ -249,7 +250,7 @@ jobs:
           printf '\n\n---\n\n' >> release-notes.md
           cat "$notes_en" >> release-notes.md
           printf '\n\n---\n\n' >> release-notes.md
-          printf 'Release assets include SHA-256 checksums and GitHub build provenance attestations. Verify the attached `SHA256SUMS` before installation.\n' >> release-notes.md
+          printf 'Release assets include SHA-256 checksums, GitHub build provenance attestations, and `THIRD_PARTY_NOTICES.md`. Verify the attached `SHA256SUMS` before installation.\n' >> release-notes.md
 
       - name: Publish GitHub release
         env:
