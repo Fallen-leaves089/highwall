@@ -1,5 +1,13 @@
 # Vendored dependencies
 
+The generated third-party license inventory for the native core, including the
+complete license texts for normal and build dependencies, is in
+[`../THIRD_PARTY_NOTICES.md`](../THIRD_PARTY_NOTICES.md). The source and patch
+provenance for the vendored crates is recorded below.
+
+After changing `subprojects/native-core/Cargo.lock`, regenerate the inventory
+with `python scripts/generate_third_party_notices.py`.
+
 ## h2 0.4.20
 
 - Source: crates.io package `h2` version `0.4.20`.

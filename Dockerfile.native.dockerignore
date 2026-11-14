@@ -2,6 +2,7 @@
 !Dockerfile.native
 !LICENSE
 !NOTICE
+!THIRD_PARTY_NOTICES.md
 !subprojects/
 !subprojects/native-core/
 !subprojects/native-core/Cargo.toml
