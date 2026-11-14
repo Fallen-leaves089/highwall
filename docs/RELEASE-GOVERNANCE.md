@@ -49,7 +49,7 @@ L5Wall 镜像名默认是 `ghcr.io/<owner>/l5wall`。临时验证仓库或 fork 
 
 ## 供应链产物
 
-HighWall 原生 Release 会执行两次干净构建并比较二进制，生成 `.buildproof.json`；还会为每个目标生成 CycloneDX JSON SBOM。SBOM、构建证明、原生二进制、Python 包和 `THIRD_PARTY_NOTICES.md` 一起进入 `SHA256SUMS` 和 build provenance attestation。
+HighWall 原生 Release 会执行两次干净构建并比较二进制，生成 `.buildproof.json`；还会为每个目标生成 CycloneDX JSON SBOM。发布前会把 SBOM 中的本地 `bom-ref` 归一化为稳定 purl，移除 `file://` 下载地址，并在发现构建机绝对路径时让发布失败。SBOM、构建证明、原生二进制、Python 包和 `THIRD_PARTY_NOTICES.md` 一起进入 `SHA256SUMS` 和 build provenance attestation。
 
 发布流程会在上传前执行 `gh attestation verify`。L5Wall 和 HighWall 镜像在签名后执行 `cosign verify`；`sign-image.yml` 在签名前验证镜像 provenance 来自本仓库的 `container.yml`。
 
