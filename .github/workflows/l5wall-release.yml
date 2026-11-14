@@ -305,6 +305,16 @@ jobs:
           printf '\n\n**Image digest:** `%s`\n' "$IMAGE_DIGEST" >> release-notes.md
           printf '\nPackage and image provenance attestations, image signatures, and `SHA256SUMS` are attached to the release.\n' >> release-notes.md
 
+      - name: Remember current latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest_json="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" 2>/dev/null || true)"
+          if [ -n "$latest_json" ]; then
+            echo "PREVIOUS_LATEST_ID=$(jq -r '.id' <<<"$latest_json")" >> "$GITHUB_ENV"
+            echo "PREVIOUS_LATEST_TAG=$(jq -r '.tag_name' <<<"$latest_json")" >> "$GITHUB_ENV"
+          fi
+
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -325,3 +335,17 @@ jobs:
           else
             gh release create "$TAG" dist/* --verify-tag --notes-file release-notes.md "${flags[@]}"
           fi
+
+      - name: Preserve repository latest release
+        if: env.PREVIOUS_LATEST_ID != '' && env.PREVIOUS_LATEST_TAG != env.TAG
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.classify.outputs.tag }}
+        run: |
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          if [ "$current" != "$PREVIOUS_LATEST_TAG" ]; then
+            echo "latest moved to $current; restoring $PREVIOUS_LATEST_TAG"
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${PREVIOUS_LATEST_ID}" -f make_latest=true >/dev/null
+          fi
+          current="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq '.tag_name')"
+          test "$current" = "$PREVIOUS_LATEST_TAG"
