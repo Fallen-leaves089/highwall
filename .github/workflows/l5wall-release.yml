@@ -102,6 +102,8 @@ jobs:
       contents: read
       id-token: write
       packages: write
+    env:
+      L5WALL_IMAGE: ${{ vars.L5WALL_IMAGE || format('ghcr.io/{0}/l5wall', github.repository_owner) }}
     outputs:
       digest: ${{ steps.build.outputs.digest }}
       image: ${{ steps.image.outputs.name }}
@@ -132,7 +134,7 @@ jobs:
 
       - name: Normalize image reference
         id: image
-        run: echo "name=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/l5wall" >> "$GITHUB_OUTPUT"
+        run: echo "name=${L5WALL_IMAGE,,}" >> "$GITHUB_OUTPUT"
 
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0

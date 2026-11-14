@@ -41,6 +41,8 @@ L4Wall 和 L5Wall 使用相同规则，只把前缀分别换成 `l4wall-v` 和 `
 
 预发布 Release 必须设置 `--prerelease`，标题带 `Alpha`、`Beta` 或 `Release Candidate`。L5Wall 的 `latest` 镜像 tag 只在 Stable 通道移动。
 
+L5Wall 镜像名默认是 `ghcr.io/<owner>/l5wall`。临时验证仓库或 fork 必须设置仓库变量 `L5WALL_IMAGE` 指向独立包名，避免测试镜像写入正式 GHCR 包。
+
 `workflow_dispatch` 只能重跑位于当前工作流提交上的既有 tag；脚本会检查 `HEAD` 与 `GITHUB_SHA` 一致，防止用旧 tag 生成指向新提交的 provenance。
 
 ## 供应链产物
