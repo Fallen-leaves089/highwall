@@ -24,8 +24,9 @@ jobs:
         env:
           IMAGE: ${{ inputs.image }}
         run: |
+          expected="ghcr.io/${GITHUB_REPOSITORY,,}"
           case "$IMAGE" in
-            ghcr.io/fallen-leaves089/highwall@sha256:*) ;;
+            "$expected"@sha256:*) ;;
             *) echo "unexpected image reference: $IMAGE"; exit 2 ;;
           esac
 
@@ -34,6 +35,22 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify image came from the container workflow
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            if gh attestation verify "oci://$IMAGE" \
+              --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/container.yml"; then
+              exit 0
+            fi
+            echo "provenance verification attempt $attempt failed; retrying"
+            sleep 6
+          done
+          exit 1
 
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
         with:

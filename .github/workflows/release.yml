@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing HighWall tag to publish, for example v0.12.0"
+        description: "Existing HighWall tag to publish, for example v0.13.0-alpha.1"
         required: true
         type: string
 
@@ -14,12 +14,42 @@ permissions:
   contents: read
 
 concurrency:
-  group: highwall-release-${{ github.ref }}
+  group: highwall-release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
 
 jobs:
+  classify:
+    name: Classify release channel
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      package_version: ${{ steps.version.outputs.package_version }}
+      channel: ${{ steps.version.outputs.channel }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      label: ${{ steps.version.outputs.label }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Validate tag and write outputs
+        id: version
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          python scripts/release_channel.py "$RELEASE_TAG" --prefix v --github-output "$GITHUB_OUTPUT"
+
   verify:
     name: Verify / Python ${{ matrix.python-version }}
+    needs: classify
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -85,8 +115,9 @@ jobs:
 
   native:
     name: Native / ${{ matrix.os }}
+    needs: classify
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -98,21 +129,26 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Resolve version
-        id: version
-        shell: bash
-        run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::expected a v<major>.<minor>.<patch> tag, got $tag"
-            exit 1
-          fi
-          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+
+      - name: Set Cargo release version
+        env:
+          VERSION: ${{ needs.classify.outputs.version }}
+        run: >-
+          python scripts/set_release_version.py cargo "$VERSION"
+          --manifest subprojects/native-core/Cargo.toml
+          --lockfile subprojects/native-core/Cargo.lock
+          --package highwall-native-core
 
       - name: Install Rust components
         run: |
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
           rustup default 1.97.1
+
+      - name: Install SBOM generator
+        run: cargo install --locked cargo-cyclonedx --version 0.5.10
 
       - name: Format and static analysis
         working-directory: subprojects/native-core
@@ -124,44 +160,125 @@ jobs:
         working-directory: subprojects/native-core
         run: cargo test --all-targets --locked
 
-      - name: Build native release (Linux)
+      - name: Build native release twice and prove reproducibility (Linux)
         if: runner.os == 'Linux'
         working-directory: subprojects/native-core
+        shell: bash
+        env:
+          VERSION: ${{ needs.classify.outputs.version }}
         run: |
+          set -euo pipefail
+          first="$RUNNER_TEMP/highwall-native-core-${VERSION}-linux-x86_64.first"
+          asset="$RUNNER_TEMP/highwall-native-core-${VERSION}-linux-x86_64"
+          proof="$RUNNER_TEMP/highwall-native-core-${VERSION}-linux-x86_64.buildproof.json"
+
+          cargo clean --release -p highwall-native-core
           cargo build --release --locked --bin highwall-native-core
           actual="$(target/release/highwall-native-core --version)"
-          test "$actual" = "highwall-native-core ${{ steps.version.outputs.version }}"
-          asset="$RUNNER_TEMP/highwall-native-core-${{ steps.version.outputs.version }}-linux-x86_64"
-          cp target/release/highwall-native-core "$asset"
-          echo "ASSET_PATH=$asset" >> "$GITHUB_ENV"
+          test "$actual" = "highwall-native-core $VERSION"
+          cp target/release/highwall-native-core "$first"
 
-      - name: Build native release (Windows)
+          sleep 2
+          cargo clean --release -p highwall-native-core
+          cargo build --release --locked --bin highwall-native-core
+          cmp "$first" target/release/highwall-native-core
+          cp target/release/highwall-native-core "$asset"
+
+          python "$GITHUB_WORKSPACE/scripts/write_build_proof.py" \
+            --first "$first" --second "$asset" --output "$proof" \
+            --version "$VERSION" --target linux-x86_64 \
+            --rustc-version "$(rustc --version)"
+          echo "ASSET_PATH=$asset" >> "$GITHUB_ENV"
+          echo "PROOF_PATH=$proof" >> "$GITHUB_ENV"
+
+      - name: Build native release twice and prove reproducibility (Windows)
         if: runner.os == 'Windows'
         working-directory: subprojects/native-core
         env:
           RUSTFLAGS: "-C link-arg=/Brepro"
+          VERSION: ${{ needs.classify.outputs.version }}
         shell: pwsh
         run: |
+          $first = Join-Path $env:RUNNER_TEMP "highwall-native-core-$env:VERSION-windows-x86_64.first.exe"
+          $asset = Join-Path $env:RUNNER_TEMP "highwall-native-core-$env:VERSION-windows-x86_64.exe"
+          $proof = Join-Path $env:RUNNER_TEMP "highwall-native-core-$env:VERSION-windows-x86_64.buildproof.json"
+
+          cargo clean --release -p highwall-native-core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo build --release --locked --bin highwall-native-core
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $actual = (& target/release/highwall-native-core.exe --version).Trim()
-          if ($actual -ne "highwall-native-core ${{ steps.version.outputs.version }}") {
+          if ($actual -ne "highwall-native-core $env:VERSION") {
             throw "unexpected native version: $actual"
           }
-          $asset = Join-Path $env:RUNNER_TEMP "highwall-native-core-${{ steps.version.outputs.version }}-windows-x86_64.exe"
-          Copy-Item -LiteralPath target/release/highwall-native-core.exe -Destination $asset
-          "ASSET_PATH=$asset" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Copy-Item -LiteralPath target/release/highwall-native-core.exe -Destination $first
 
-      - name: Upload native release asset
+          Start-Sleep -Seconds 2
+          cargo clean --release -p highwall-native-core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo build --release --locked --bin highwall-native-core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $firstHash = (Get-FileHash -LiteralPath $first -Algorithm SHA256).Hash
+          $secondHash = (Get-FileHash -LiteralPath target/release/highwall-native-core.exe -Algorithm SHA256).Hash
+          if ($firstHash -ne $secondHash) {
+            throw "native release is not reproducible: $firstHash != $secondHash"
+          }
+          Copy-Item -LiteralPath target/release/highwall-native-core.exe -Destination $asset
+
+          $rustcVersion = (& rustc --version).Trim()
+          python (Join-Path $env:GITHUB_WORKSPACE 'scripts/write_build_proof.py') `
+            --first $first --second $asset --output $proof `
+            --version $env:VERSION --target windows-x86_64 `
+            --rustc-version $rustcVersion
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "ASSET_PATH=$asset" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PROOF_PATH=$proof" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Generate native SBOM (Linux)
+        if: runner.os == 'Linux'
+        working-directory: subprojects/native-core
+        shell: bash
+        env:
+          VERSION: ${{ needs.classify.outputs.version }}
+        run: |
+          set -euo pipefail
+          stem="highwall-native-core-${VERSION}-linux-x86_64.cdx"
+          cargo cyclonedx --format json --override-filename "$stem" --target x86_64-unknown-linux-gnu
+          source="$(find . -maxdepth 1 -type f -name "${stem}.json" -print -quit)"
+          test -n "$source"
+          destination="$RUNNER_TEMP/${stem}.json"
+          cp "$source" "$destination"
+          echo "SBOM_PATH=$destination" >> "$GITHUB_ENV"
+
+      - name: Generate native SBOM (Windows)
+        if: runner.os == 'Windows'
+        working-directory: subprojects/native-core
+        env:
+          VERSION: ${{ needs.classify.outputs.version }}
+        shell: pwsh
+        run: |
+          $stem = "highwall-native-core-$env:VERSION-windows-x86_64.cdx"
+          cargo cyclonedx --format json --override-filename $stem --target x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $source = Get-ChildItem -LiteralPath . -Filter "$stem.json" -File | Select-Object -First 1
+          if ($null -eq $source) { throw "cargo-cyclonedx did not produce $stem.json" }
+          $destination = Join-Path $env:RUNNER_TEMP "$stem.json"
+          Copy-Item -LiteralPath $source.FullName -Destination $destination
+          "SBOM_PATH=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upload native release assets
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: native-${{ runner.os }}
-          path: ${{ env.ASSET_PATH }}
+          path: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.SBOM_PATH }}
+            ${{ env.PROOF_PATH }}
           if-no-files-found: error
 
   release:
-    name: Build packages and publish Alpha pre-release
-    needs: [verify, native]
+    name: Build packages and publish release
+    needs: [classify, verify, native]
     runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 20
@@ -174,27 +291,17 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
 
-      - name: Resolve tag and release channel
-        id: version
-        shell: bash
-        run: |
-          tag="${{ inputs.tag || github.ref_name }}"
-          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error::expected a v<major>.<minor>.<patch> tag, got $tag"
-            exit 1
-          fi
-          version="${tag#v}"
-          case "$version" in
-            0.*) prerelease=true ;;
-            *) prerelease=false ;;
-          esac
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.12"
+
+      - name: Set Python package release version
+        env:
+          PACKAGE_VERSION: ${{ needs.classify.outputs.package_version }}
+        run: >-
+          python scripts/set_release_version.py python "$PACKAGE_VERSION"
+          --pyproject pyproject.toml
+          --module highwall/__init__.py
 
       - name: Build Python distributions
         run: |
@@ -203,17 +310,17 @@ jobs:
 
       - name: Reject secrets, tests, and build residue in distributions
         env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: python scripts/check_dist.py dist --version "$VERSION"
+          PACKAGE_VERSION: ${{ needs.classify.outputs.package_version }}
+        run: python scripts/check_dist.py dist --version "$PACKAGE_VERSION"
 
       - name: Install wheel and check CLI version
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          PACKAGE_VERSION: ${{ needs.classify.outputs.package_version }}
         run: |
           python -m venv "$RUNNER_TEMP/highwall-venv"
           "$RUNNER_TEMP/highwall-venv/bin/pip" install --disable-pip-version-check dist/*.whl
           installed="$("$RUNNER_TEMP/highwall-venv/bin/highwall" --version | awk '{print $2}')"
-          test "$installed" = "$VERSION"
+          test "$installed" = "$PACKAGE_VERSION"
           "$RUNNER_TEMP/highwall-venv/bin/highwall" --version
 
       - name: Download native binaries
@@ -222,14 +329,17 @@ jobs:
           path: native-assets
 
       - name: Assemble release assets
+        env:
+          VERSION: ${{ needs.classify.outputs.version }}
         run: |
+          set -euo pipefail
           mkdir -p release-assets
           cp dist/*.whl dist/*.tar.gz release-assets/
           find native-assets -maxdepth 2 -type f -exec cp {} release-assets/ \;
-          cp subprojects/native-core/config.example.json "release-assets/highwall-native-config-${{ steps.version.outputs.version }}.example.json"
+          cp subprojects/native-core/config.example.json "release-assets/highwall-native-config-${VERSION}.example.json"
           cp THIRD_PARTY_NOTICES.md release-assets/
           cd release-assets
-          sha256sum highwall-*.whl highwall-*.tar.gz highwall-native-core-* highwall-native-config-* THIRD_PARTY_NOTICES.md > SHA256SUMS
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\0' | sort -z | xargs -0 sha256sum > SHA256SUMS
           cat SHA256SUMS
 
       - name: Attest release asset provenance
@@ -238,9 +348,32 @@ jobs:
           subject-path: release-assets/*
           push: true
 
+      - name: Verify release asset attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for attempt in 1 2 3 4 5; do
+            verified=true
+            for artifact in release-assets/*; do
+              if ! gh attestation verify "$artifact" \
+                --repo "$GITHUB_REPOSITORY" \
+                --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+                --source-digest "$GITHUB_SHA"; then
+                verified=false
+                break
+              fi
+            done
+            if [ "$verified" = true ]; then
+              exit 0
+            fi
+            echo "attestation verification attempt $attempt failed; retrying"
+            sleep 6
+          done
+          exit 1
+
       - name: Prepare release notes
         env:
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.classify.outputs.version }}
         run: |
           notes="docs/RELEASE-v${VERSION}.md"
           notes_en="docs/RELEASE-v${VERSION}.en.md"
@@ -250,22 +383,23 @@ jobs:
           printf '\n\n---\n\n' >> release-notes.md
           cat "$notes_en" >> release-notes.md
           printf '\n\n---\n\n' >> release-notes.md
-          printf 'Release assets include SHA-256 checksums, GitHub build provenance attestations, and `THIRD_PARTY_NOTICES.md`. Verify the attached `SHA256SUMS` before installation.\n' >> release-notes.md
+          printf 'Release assets include SHA-256 checksums, GitHub build provenance attestations, CycloneDX SBOMs, reproducibility proofs, and `THIRD_PARTY_NOTICES.md`. Verify the attached `SHA256SUMS` and attestations before installation.\n' >> release-notes.md
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.version.outputs.tag }}
-          VERSION: ${{ steps.version.outputs.version }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          TAG: ${{ needs.classify.outputs.tag }}
+          VERSION: ${{ needs.classify.outputs.version }}
+          PRERELEASE: ${{ needs.classify.outputs.prerelease }}
+          LABEL: ${{ needs.classify.outputs.label }}
         run: |
           title="HighWall $VERSION"
+          flags=(--title "$title")
           if [ "$PRERELEASE" = "true" ]; then
-            title="$title (Alpha)"
-          fi
-          flags=(--latest=false --title "$title")
-          if [ "$PRERELEASE" = "true" ]; then
-            flags+=(--prerelease)
+            title="HighWall $VERSION ($LABEL)"
+            flags=(--title "$title" --prerelease --latest=false)
+          else
+            flags+=(--latest)
           fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" release-assets/* --clobber
