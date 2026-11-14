@@ -134,6 +134,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set Cargo release version
+        shell: bash
         env:
           VERSION: ${{ needs.classify.outputs.version }}
         run: >-
