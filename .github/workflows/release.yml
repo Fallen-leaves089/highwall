@@ -249,6 +249,7 @@ jobs:
           test -n "$source"
           destination="$RUNNER_TEMP/${stem}.json"
           cp "$source" "$destination"
+          python "$GITHUB_WORKSPACE/scripts/normalize_sbom.py" "$destination"
           echo "SBOM_PATH=$destination" >> "$GITHUB_ENV"
 
       - name: Generate native SBOM (Windows)
@@ -265,6 +266,8 @@ jobs:
           if ($null -eq $source) { throw "cargo-cyclonedx did not produce $stem.json" }
           $destination = Join-Path $env:RUNNER_TEMP "$stem.json"
           Copy-Item -LiteralPath $source.FullName -Destination $destination
+          python (Join-Path $env:GITHUB_WORKSPACE 'scripts/normalize_sbom.py') $destination
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           "SBOM_PATH=$destination" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Upload native release assets
