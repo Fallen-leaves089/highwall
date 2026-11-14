@@ -702,7 +702,7 @@ python -m unittest tests.test_native_chain -v
 
 跨层回环攻防验收位于 `tests/test_attack_defense.py`：真实 TCP 串联 L4Wall、HighWall 和模拟上游，覆盖 L4 封禁/限速/超时、共享封禁故障隔离、L7 Host/走私/穿越/WAF/DLP/CSRF/XFF，以及直连 HighWall/上游的绕过边界。完整矩阵、实测结果和未验证项见 [docs/ATTACK_TESTING.md](docs/ATTACK_TESTING.md)。
 
-GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.15 上执行 Ruff、mypy、覆盖率与完整测试；CodeQL 每周和每次 PR 扫描；Dependabot 每周检查 Actions、Python 开发依赖和 Docker 基础镜像。所有第三方 Actions 固定到提交 SHA，发布镜像附带 SBOM、provenance、cosign 签名和 GitHub attestation。
+GitHub Actions 在 Ubuntu/Windows 和 Python 3.10–3.15 上执行 Ruff、mypy、覆盖率与完整测试；CodeQL 每周和每次 PR 扫描；Dependabot 每周检查 Actions、Python 开发依赖和 Docker 基础镜像。所有第三方 Actions 固定到提交 SHA，发布镜像附带 SBOM、provenance、cosign 签名和 GitHub attestation。tag 保护、环境审批和供应链门禁见 [发布治理](docs/RELEASE-GOVERNANCE.md)。
 
 ## 开源许可
 

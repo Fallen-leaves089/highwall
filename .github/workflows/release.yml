@@ -163,6 +163,7 @@ jobs:
     name: Build packages and publish Alpha pre-release
     needs: [verify, native]
     runs-on: ubuntu-24.04
+    environment: release
     timeout-minutes: 20
     permissions:
       attestations: write
