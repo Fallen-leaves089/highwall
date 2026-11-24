@@ -38,7 +38,7 @@ Generated with `cargo-about 0.9.3` using `subprojects/native-core/about.toml` an
 | autocfg | 1.5.1 | Apache-2.0 OR MIT | https://github.com/cuviper/autocfg |
 | base64 | 0.23.1 | MIT OR Apache-2.0 | https://github.com/marshallpierce/rust-base64 |
 | block-buffer | 0.12.1 | MIT OR Apache-2.0 | https://github.com/RustCrypto/utils |
-| bytes | 1.12.1 | MIT | https://github.com/tokio-rs/bytes |
+| bytes | 1.12.2 | MIT | https://github.com/tokio-rs/bytes |
 | cc | 1.10.0 | MIT OR Apache-2.0 | https://github.com/rust-lang/cc-rs |
 | cfg-if | 1.0.5 | MIT OR Apache-2.0 | https://github.com/rust-lang/cfg-if |
 | cfg_aliases | 0.2.2 | MIT | https://github.com/katharostech/cfg_aliases |
@@ -109,9 +109,9 @@ Generated with `cargo-about 0.9.3` using `subprojects/native-core/about.toml` an
 | rand | 0.10.3 | MIT OR Apache-2.0 | https://github.com/rust-random/rand |
 | rand_core | 0.10.1 | MIT OR Apache-2.0 | https://github.com/rust-random/rand_core |
 | rand_pcg | 0.10.2 | MIT OR Apache-2.0 | https://github.com/rust-random/rngs |
-| regex | 1.13.1 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
-| regex-automata | 0.4.18 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
-| regex-syntax | 0.8.11 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
+| regex | 1.13.2 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
+| regex-automata | 0.4.19 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
+| regex-syntax | 0.8.12 | MIT OR Apache-2.0 | https://github.com/rust-lang/regex |
 | ring | 0.17.14 | Apache-2.0 AND ISC | https://github.com/briansmith/ring |
 | rustc-hash | 2.1.3 | Apache-2.0 OR MIT | https://github.com/rust-lang/rustc-hash |
 | rusticata-macros | 4.1.0 | MIT OR Apache-2.0 | https://github.com/rusticata/rusticata-macros.git |
@@ -3035,9 +3035,9 @@ Used by:
 - `once_cell 1.21.4`
 - `parking_lot 0.12.5`
 - `parking_lot_core 0.9.12`
-- `regex-automata 0.4.18`
-- `regex-syntax 0.8.11`
-- `regex 1.13.1`
+- `regex-automata 0.4.19`
+- `regex-syntax 0.8.12`
+- `regex 1.13.2`
 - `ring 0.17.14`
 - `rusticata-macros 4.1.0`
 - `rustls-pemfile 2.2.0`
@@ -5134,7 +5134,7 @@ DEALINGS IN THE SOFTWARE.
 ### MIT License (`MIT`)
 
 Used by:
-- `bytes 1.12.1`
+- `bytes 1.12.2`
 
 ````text
 Copyright (c) 2018 Carl Lerche
